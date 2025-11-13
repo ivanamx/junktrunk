@@ -1,0 +1,89 @@
+{
+  "expo": {
+    "name": "JunkTrunk",
+    "slug": "junktrunk",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "junktrunk",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.junktrunk.app",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSExceptionDomains": {
+            "localhost": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        },
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": [
+              "junktrunk"
+            ]
+          }
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1a1a1a"
+      },
+      "package": "com.junktrunk.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "junktrunk"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
+    "web": {
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow JunkTrunk to use your location."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      "expo-camera",
+      "expo-asset",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "junktrunk-oauth"
+      },
+      "REDDIT_CLIENT_ID": "",
+      "REDDIT_CLIENT_SECRET": "",
+      "EBAY_CLIENT_ID": "",
+      "EBAY_CLIENT_SECRET": "",
+      "AMAZON_CLIENT_ID": "",
+      "AMAZON_CLIENT_SECRET": "",
+      "FACEBOOK_CLIENT_ID": "",
+      "FACEBOOK_CLIENT_SECRET": ""
+    }
+  }
+}
