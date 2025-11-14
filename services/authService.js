@@ -5,7 +5,7 @@ const USER_KEY = '@JunkTrunk:user';
 
 // Helper to get base URL (should match api.js)
 const getBaseUrl = () => {
-  const LOCALTUNNEL_URL = 'https://warm-owls-throw.loca.lt'; // 👈 URL de localtunnel (debe coincidir con api.js)
+  const LOCALTUNNEL_URL = 'https://162.0.233.144/junktrunk';
   if (LOCALTUNNEL_URL && LOCALTUNNEL_URL !== null && LOCALTUNNEL_URL !== '') {
     return `${LOCALTUNNEL_URL}/api`;
   }

@@ -32,6 +32,7 @@
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#1a1a1a"
       },
       "package": "com.junktrunk.app",
@@ -49,10 +50,15 @@
             "DEFAULT"
           ]
         }
+      ],
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
-    "web": {
-    },
+    "web": {},
     "plugins": [
       [
         "expo-location",
@@ -65,6 +71,12 @@
         {
           "ios": {
             "useFrameworks": "static"
+          },
+          "android": {
+            "minSdkVersion": 24,
+            "targetSdkVersion": 34,
+            "compileSdkVersion": 35,
+            "usesCleartextTraffic": true
           }
         }
       ],
@@ -73,17 +85,24 @@
       "expo-secure-store"
     ],
     "extra": {
-      "eas": {
-        "projectId": "junktrunk-oauth"
-      },
       "REDDIT_CLIENT_ID": "",
       "REDDIT_CLIENT_SECRET": "",
-      "EBAY_CLIENT_ID": "",
+      "EBAY_CLIENT_ID": "IVANMONT-JunkTrun-PRD-7705dc6eb-50dfdf31",
       "EBAY_CLIENT_SECRET": "",
       "AMAZON_CLIENT_ID": "",
       "AMAZON_CLIENT_SECRET": "",
       "FACEBOOK_CLIENT_ID": "",
-      "FACEBOOK_CLIENT_SECRET": ""
+      "FACEBOOK_CLIENT_SECRET": "",
+      "eas": {
+        "projectId": "ace89431-0e54-46d5-9528-208fdf888f63"
+      }
+    },
+    "owner": "ivanamx",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/ace89431-0e54-46d5-9528-208fdf888f63"
     }
   }
 }

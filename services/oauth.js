@@ -36,7 +36,8 @@ const PLATFORM_CONFIGS = {
     clientSecret: getEnvVar('EBAY_CLIENT_SECRET'),
     authUrl: 'https://auth.ebay.com/oauth2/authorize',
     tokenUrl: 'https://api.ebay.com/identity/v1/oauth2/token',
-    scopes: ['https://api.ebay.com/oauth/api_scope/sell.marketing.readonly', 'https://api.ebay.com/oauth/api_scope/sell.inventory'],
+    // Scopes needed for posting listings: sell.inventory (create/update listings) and sell.marketing (promote listings)
+    scopes: ['https://api.ebay.com/oauth/api_scope/sell.inventory', 'https://api.ebay.com/oauth/api_scope/sell.marketing'],
     redirectUri: AuthSession.makeRedirectUri({
       scheme: 'junktrunk',
       path: 'oauth/ebay',

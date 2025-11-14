@@ -16,25 +16,57 @@ import ApiService from '../services/api';
 export default function DescriptionScreen({ visible, onClose, product, onDescriptionGenerated }) {
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
-  const [additionalInfo, setAdditionalInfo] = useState('');
+  const [price, setPrice] = useState('');
 
-  useEffect(() => {
-    if (visible && product) {
-      generateDescription();
+  // Helper function to calculate average price from prices array
+  const calculateAveragePrice = (product) => {
+    if (product.prices && Array.isArray(product.prices) && product.prices.length > 0) {
+      // Extract numeric values from price strings (e.g., "$10.99" -> 10.99)
+      const numericPrices = product.prices
+        .map(p => {
+          if (p.price) {
+            const numeric = parseFloat(p.price.replace(/[^0-9.]/g, ''));
+            return isNaN(numeric) ? null : numeric;
+          }
+          return null;
+        })
+        .filter(p => p !== null);
+      
+      if (numericPrices.length > 0) {
+        // Calculate average
+        const sum = numericPrices.reduce((acc, val) => acc + val, 0);
+        const average = sum / numericPrices.length;
+        return average.toFixed(2);
+      }
     }
-  }, [visible, product]);
+    
+    // If no prices array or calculation failed, try product.price
+    if (product.price) {
+      // Extract numeric value from price string (e.g., "$10.99" -> "10.99")
+      const numericPrice = product.price.replace(/[^0-9.]/g, '');
+      if (numericPrice) {
+        return numericPrice;
+      }
+    }
+    
+    return '';
+  };
 
-  const generateDescription = async () => {
+  const generateDescription = async (priceToUse = null) => {
     if (!product) return;
 
     try {
       setLoading(true);
+      // Use provided price, or current price state, or product price
+      const finalPrice = priceToUse || price || (product.price ? product.price.replace(/[^0-9.]/g, '') : '');
+      const priceToSend = finalPrice ? `$${parseFloat(finalPrice).toFixed(2)}` : null;
+      
       const response = await ApiService.generateDescription(
         product.name,
-        product.price,
+        priceToSend,
         null, // category - can be added later
         null, // brand - can be added later
-        additionalInfo || null
+        null // additionalInfo removed
       );
 
       if (response.success) {
@@ -51,23 +83,52 @@ export default function DescriptionScreen({ visible, onClose, product, onDescrip
     }
   };
 
+  useEffect(() => {
+    if (visible && product) {
+      // Calculate average price from prices array
+      const calculatedPrice = calculateAveragePrice(product);
+      setPrice(calculatedPrice);
+      
+      // Generate description with calculated price
+      if (calculatedPrice) {
+        generateDescription(calculatedPrice);
+      } else {
+        generateDescription();
+      }
+    }
+  }, [visible, product]);
+
   const handleRegenerate = () => {
     generateDescription();
   };
 
-  const handleCopy = () => {
-    // Copy to clipboard functionality can be added with expo-clipboard
-    Alert.alert('Copied!', 'Description copied to clipboard');
+  const handleUse = () => {
+    if (!description) {
+      Alert.alert('No Description', 'Please generate a description first.');
+      return;
+    }
+    
+    // Use the description - update product and close modal
+    // Also update price if a custom price was entered
+    if (onDescriptionGenerated) {
+      onDescriptionGenerated(description, price ? `$${parseFloat(price).toFixed(2)}` : null);
+    }
+    
+    // Close the modal
+    if (onClose) {
+      onClose();
+    }
   };
 
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      transparent={false}
+      transparent={true}
       onRequestClose={onClose}
     >
-      <SafeAreaView style={styles.container}>
+      <View style={styles.modalOverlay}>
+        <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <Text style={styles.title}>Product Description</Text>
           <TouchableOpacity 
@@ -95,14 +156,23 @@ export default function DescriptionScreen({ visible, onClose, product, onDescrip
           )}
 
           <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>Additional Information (Optional)</Text>
+            <Text style={styles.inputLabel}>Price (Optional)</Text>
             <TextInput
               style={styles.input}
-              placeholder="Add any additional details about the product..."
-              value={additionalInfo}
-              onChangeText={setAdditionalInfo}
-              multiline
-              numberOfLines={3}
+              placeholder="Enter price (e.g., 10.99)"
+              value={price}
+              onChangeText={(text) => {
+                // Allow only numbers and decimal point
+                const numericText = text.replace(/[^0-9.]/g, '');
+                // Ensure only one decimal point
+                const parts = numericText.split('.');
+                if (parts.length > 2) {
+                  setPrice(parts[0] + '.' + parts.slice(1).join(''));
+                } else {
+                  setPrice(numericText);
+                }
+              }}
+              keyboardType="decimal-pad"
             />
           </View>
 
@@ -131,23 +201,42 @@ export default function DescriptionScreen({ visible, onClose, product, onDescrip
 
             {description && (
               <TouchableOpacity
-                style={[styles.button, styles.copyButton]}
-                onPress={handleCopy}
+                style={[styles.button, styles.useButton]}
+                onPress={handleUse}
               >
-                <Text style={styles.buttonText}>COPY</Text>
+                <Text style={styles.buttonText}>USE</Text>
               </TouchableOpacity>
             )}
           </View>
         </ScrollView>
-      </SafeAreaView>
+        </SafeAreaView>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  modalOverlay: {
     flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  container: {
+    width: '90%',
+    maxWidth: 500,
+    height: '75%',
     backgroundColor: '#f5f5f5',
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
   },
   header: {
     flexDirection: 'row',
@@ -217,7 +306,6 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     borderWidth: 1,
     borderColor: '#e0e0e0',
-    textAlignVertical: 'top',
   },
   loadingContainer: {
     padding: 40,
@@ -263,7 +351,7 @@ const styles = StyleSheet.create({
   regenerateButton: {
     backgroundColor: '#1a1a1a',
   },
-  copyButton: {
+  useButton: {
     backgroundColor: '#2c5f2d',
   },
   buttonText: {

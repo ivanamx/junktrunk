@@ -412,10 +412,29 @@ export default function HomeScreen() {
     setShowPlatforms(false);
   };
 
-  const handleDescriptionGenerated = (description) => {
-    // Update product with description
+  const handleDescriptionGenerated = (description, price = null) => {
+    // Update product with description and price locally
+    if (scannedProduct) {
+      const updatedProduct = {
+        ...scannedProduct,
+        description: description,
+      };
+      
+      // Update price if provided
+      if (price) {
+        updatedProduct.price = price;
+      }
+      
+      setScannedProduct(updatedProduct);
+    }
+    
+    // Update product in backend if it has an ID
     if (scannedProduct && scannedProduct.id) {
-      ApiService.updateProduct(scannedProduct.id, { description });
+      const updateData = { description };
+      if (price) {
+        updateData.price = price;
+      }
+      ApiService.updateProduct(scannedProduct.id, updateData);
     }
   };
 

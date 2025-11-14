@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActivityIndicator, View, StyleSheet, AppState } from 'react-native';
+import * as Updates from 'expo-updates';
 import HomeScreen from './screens/HomeScreen';
 import MapScreen from './screens/MapScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -17,6 +18,9 @@ export default function App() {
   const checkIntervalRef = useRef(null);
 
   useEffect(() => {
+    // Check for OTA updates on app start
+    checkForUpdates();
+    
     // Initial auth check
     checkAuth();
     
@@ -26,7 +30,8 @@ export default function App() {
         appState.current.match(/inactive|background/) &&
         nextAppState === 'active'
       ) {
-        // App has come to the foreground, check auth
+        // App has come to the foreground, check for updates and auth
+        checkForUpdates();
         checkAuth();
       }
       appState.current = nextAppState;
@@ -49,6 +54,31 @@ export default function App() {
       }
     };
   }, [isAuthenticated]);
+
+  const checkForUpdates = async () => {
+    try {
+      // Only check for updates in production builds, not in development
+      if (__DEV__) {
+        console.log('🔧 Development mode: Skipping OTA update check');
+        return;
+      }
+
+      const update = await Updates.checkForUpdateAsync();
+      
+      if (update.isAvailable) {
+        console.log('📦 Nueva actualización disponible, descargando...');
+        await Updates.fetchUpdateAsync();
+        console.log('✅ Actualización descargada, se aplicará al reiniciar la app');
+        // Reload the app to apply the update
+        await Updates.reloadAsync();
+      } else {
+        console.log('✅ App está actualizada');
+      }
+    } catch (error) {
+      console.error('❌ Error al verificar actualizaciones:', error);
+      // Don't block the app if update check fails
+    }
+  };
 
   const checkAuthLight = async () => {
     try {
