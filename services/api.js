@@ -106,6 +106,55 @@ class ApiService {
     }
   }
 
+  async scanProductByImage(imageBase64, imageUri = null, latitude = null, longitude = null, userId = null) {
+    try {
+      console.log('🌐 Calling API:', `${API_BASE_URL}/products/scan-image`);
+      console.log('📸 Image data length:', imageBase64 ? imageBase64.length : 0);
+      
+      // Create AbortController for timeout - increased to 30 seconds for image processing
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for image processing
+      
+      const response = await fetch(`${API_BASE_URL}/products/scan-image`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image_base64: imageBase64,
+          image_uri: imageUri,
+          latitude,
+          longitude,
+          user_id: userId,
+        }),
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      console.log('📥 Response status:', response.status, response.statusText);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ API Error:', response.status, errorText);
+        throw new Error(`API error: ${response.status} - ${errorText}`);
+      }
+      
+      const data = await response.json();
+      console.log('✅ API Response:', data);
+      return data;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.error('⏱️ Request timeout after 30 seconds');
+        throw new Error('Request timeout: El servidor no respondió a tiempo');
+      }
+      console.error('❌ Image scan error:', error.message);
+      console.error('🔗 API URL:', API_BASE_URL);
+      console.error('📋 Full error:', error);
+      throw error;
+    }
+  }
+
   async getPlatforms() {
     try {
       const response = await fetch(`${API_BASE_URL}/platforms/list`);

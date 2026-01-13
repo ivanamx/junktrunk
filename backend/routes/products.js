@@ -422,6 +422,335 @@ const lookupBarcode = async (barcode) => {
   }
 };
 
+// Extract text from image using Google Vision API (REST)
+const extractTextFromImage = async (imageBase64) => {
+  try {
+    console.log('🔍 Extracting text from image using Google Vision API...');
+    const visionApiKey = process.env.GOOGLE_VISION_API_KEY;
+    
+    if (!visionApiKey || visionApiKey === 'your-google-vision-api-key-here') {
+      console.log('⚠️ Google Vision API Key not configured');
+      return null;
+    }
+
+    // Use Google Vision API REST endpoint
+    const visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
+    
+    const requestBody = {
+      requests: [
+        {
+          image: {
+            content: imageBase64
+          },
+          features: [
+            {
+              type: 'TEXT_DETECTION',
+              maxResults: 10
+            }
+          ]
+        }
+      ]
+    };
+
+    const response = await axios.post(visionApiUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+
+    if (!response.data || !response.data.responses || response.data.responses.length === 0) {
+      console.log('⚠️ No response from Google Vision API');
+      return null;
+    }
+
+    const visionResponse = response.data.responses[0];
+    
+    if (!visionResponse.textAnnotations || visionResponse.textAnnotations.length === 0) {
+      console.log('⚠️ No text detected in image');
+      return null;
+    }
+
+    // The first annotation contains all text, subsequent ones are individual words
+    const fullText = visionResponse.textAnnotations[0].description || '';
+    console.log('✅ Text extracted from image:', fullText.substring(0, 200));
+    
+    // Try to extract product name (look for common patterns)
+    // Usually product names are in the first few lines or have specific formatting
+    const lines = fullText.split('\n').filter(line => line.trim().length > 0);
+    
+    // Look for product name patterns:
+    // 1. First substantial line (usually product name)
+    // 2. Lines that don't look like prices, dates, or codes
+    let productName = null;
+    
+    for (const line of lines.slice(0, 10)) { // Check first 10 lines
+      const trimmedLine = line.trim();
+      // Skip if it looks like a price, date, or code
+      if (
+        /^\$[\d,]+/.test(trimmedLine) || // Price
+        /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(trimmedLine) || // Date
+        /^[A-Z0-9]{8,}$/.test(trimmedLine) || // Code/UPC
+        trimmedLine.length < 3 // Too short
+      ) {
+        continue;
+      }
+      
+      // Found a likely product name
+      productName = trimmedLine;
+      break;
+    }
+    
+    // If no specific product name found, use first substantial text block
+    if (!productName && fullText.trim().length > 0) {
+      productName = fullText.split('\n')[0].trim();
+    }
+    
+    return productName || fullText.trim().substring(0, 100); // Return first 100 chars if no name found
+  } catch (error) {
+    console.error('❌ Error extracting text from image:', error.message);
+    if (error.response) {
+      console.error('❌ Vision API error response:', error.response.data);
+    }
+    return null;
+  }
+};
+
+// Lookup product by name (similar to lookupBarcode but searches by product name)
+const lookupProductByName = async (productName) => {
+  try {
+    console.log('🔍 Starting product lookup by name:', productName);
+    
+    let result = {
+      name: productName, // Use the provided name
+      image: null,
+      brand: null,
+      category: null,
+      platform: null,
+      url: null,
+      prices: [] // Array of {source: string, price: string, url: string}
+    };
+    
+    // Search eBay by product name
+    try {
+      console.log('🌐 Searching eBay by product name...');
+      const ebayAppId = process.env.EBAY_APP_ID;
+      
+      if (ebayAppId && ebayAppId !== 'your-ebay-app-id-here') {
+        const ebayResponse = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+          params: {
+            'OPERATION-NAME': 'findItemsByKeywords',
+            'SERVICE-VERSION': '1.0.0',
+            'SECURITY-APPNAME': ebayAppId,
+            'RESPONSE-DATA-FORMAT': 'JSON',
+            'REST-PAYLOAD': '',
+            'keywords': productName,
+            'paginationInput.entriesPerPage': 10,
+            'sortOrder': 'PricePlusShippingLowest'
+          },
+          timeout: 10000
+        });
+        
+        if (ebayResponse.data && 
+            ebayResponse.data.findItemsByKeywordsResponse && 
+            ebayResponse.data.findItemsByKeywordsResponse[0] &&
+            ebayResponse.data.findItemsByKeywordsResponse[0].searchResult &&
+            ebayResponse.data.findItemsByKeywordsResponse[0].searchResult[0] &&
+            ebayResponse.data.findItemsByKeywordsResponse[0].searchResult[0].item &&
+            ebayResponse.data.findItemsByKeywordsResponse[0].searchResult[0].item.length > 0) {
+          
+          const items = ebayResponse.data.findItemsByKeywordsResponse[0].searchResult[0].item;
+          console.log(`✅ Found ${items.length} items in eBay`);
+          
+          // Get image from first item if available
+          if (!result.image && items[0].galleryURL && items[0].galleryURL[0]) {
+            result.image = items[0].galleryURL[0];
+            console.log('✅ Found image in eBay');
+          }
+          
+          // Add prices from eBay
+          items.forEach(item => {
+            const itemPrice = item.sellingStatus && 
+                            item.sellingStatus[0] && 
+                            item.sellingStatus[0].currentPrice && 
+                            item.sellingStatus[0].currentPrice[0] &&
+                            item.sellingStatus[0].currentPrice[0].__value__ ? 
+                            item.sellingStatus[0].currentPrice[0].__value__ : null;
+            const itemUrl = item.viewItemURL && item.viewItemURL[0] ? item.viewItemURL[0] : null;
+            
+            if (itemPrice) {
+              const existingPrice = result.prices.find(p => 
+                Math.abs(parseFloat(p.price.replace('$', '').replace(/,/g, '')) - parseFloat(itemPrice)) < 0.01
+              );
+              if (!existingPrice) {
+                result.prices.push({
+                  source: 'eBay',
+                  price: `$${parseFloat(itemPrice).toFixed(2)}`,
+                  url: itemUrl || `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(productName)}`
+                });
+                console.log('✅ Found price in eBay:', result.prices[result.prices.length - 1].price);
+              }
+            }
+          });
+        } else {
+          console.log('⚠️ eBay returned no items');
+        }
+      } else {
+        console.log('⚠️ eBay App ID not configured, skipping eBay API');
+      }
+    } catch (error) {
+      console.log(`❌ eBay Finding API failed:`, error.message);
+    }
+
+    // Search Google Custom Search API
+    try {
+      console.log('🌐 Searching Google Custom Search API...');
+      const googleApiKey = process.env.GOOGLE_API_KEY;
+      const googleCx = process.env.GOOGLE_CX;
+
+      if (googleApiKey && googleCx && googleApiKey !== 'your-api-key-here' && googleCx !== 'your-search-engine-id-here') {
+        // Helper function to extract prices from text
+        const extractPrices = (text) => {
+          const prices = [];
+          if (!text) return prices;
+          
+          const dollarPattern = /\$[\d,]+\.?\d*/g;
+          const usdPattern = /USD\s*[\d,]+\.?\d*/gi;
+          const simpleDollarPattern = /\$\s*[\d,]+(?:\.\d{2})?/g;
+          const priceLabelPattern = /(?:price|precio|cost|precio):\s*\$?[\d,]+\.?\d*/gi;
+          const mxnPattern = /MXN\s*\$?[\d,]+\.?\d*/gi;
+          
+          const allPatterns = [
+            ...text.match(dollarPattern) || [],
+            ...text.match(usdPattern) || [],
+            ...text.match(simpleDollarPattern) || [],
+            ...text.match(priceLabelPattern) || [],
+            ...text.match(mxnPattern) || []
+          ];
+          
+          for (const match of allPatterns) {
+            const priceValue = match.replace(/[^0-9.]/g, '').replace(/,/g, '');
+            const priceNum = parseFloat(priceValue);
+            
+            if (!isNaN(priceNum) && priceNum > 0 && priceNum < 1000000) {
+              const formattedPrice = `$${priceNum.toFixed(2)}`;
+              
+              const existingPrice = prices.find(p => 
+                Math.abs(parseFloat(p.replace('$', '').replace(/,/g, '')) - priceNum) < 0.01
+              );
+              
+              if (!existingPrice) {
+                prices.push(formattedPrice);
+              }
+            }
+          }
+          
+          return prices;
+        };
+
+        // Search for product with shopping focus
+        try {
+          const googleShoppingResponse = await axios.get('https://www.googleapis.com/customsearch/v1', {
+            params: {
+              key: googleApiKey,
+              cx: googleCx,
+              q: `${productName} buy price shopping`,
+              num: 5,
+              safe: 'active'
+            },
+            timeout: 10000
+          });
+          
+          if (googleShoppingResponse.data && googleShoppingResponse.data.items && googleShoppingResponse.data.items.length > 0) {
+            const items = googleShoppingResponse.data.items;
+            console.log(`🔍 Found ${items.length} Google search results`);
+            
+            for (const item of items) {
+              // Extract prices from snippet, title, and HTML snippet
+              const searchText = `${item.title || ''} ${item.snippet || ''} ${item.htmlSnippet || ''}`;
+              const foundPrices = extractPrices(searchText);
+              
+              // Add found prices
+              for (const price of foundPrices) {
+                const existingPrice = result.prices.find(p => {
+                  const p1 = parseFloat(p.price.replace('$', '').replace(/,/g, ''));
+                  const p2 = parseFloat(price.replace('$', '').replace(/,/g, ''));
+                  return Math.abs(p1 - p2) < 0.01;
+                });
+                
+                if (!existingPrice) {
+                  const sellerName = item.displayLink || 'Google';
+                  result.prices.push({
+                    source: sellerName,
+                    price: price,
+                    url: item.link || `https://www.google.com/search?q=${encodeURIComponent(productName)}`
+                  });
+                  console.log(`✅ Found price in Google: ${price} from ${sellerName}`);
+                }
+              }
+              
+              // Get image if not already found
+              if (!result.image && item.pagemap && item.pagemap.cse_image && item.pagemap.cse_image[0]) {
+                result.image = item.pagemap.cse_image[0].src;
+                console.log('✅ Found image in Google search');
+              }
+              
+              // Set platform and URL
+              if (!result.platform) {
+                result.platform = 'Google';
+                result.url = item.link || `https://www.google.com/search?q=${encodeURIComponent(productName)}`;
+              }
+            }
+          }
+        } catch (shoppingError) {
+          console.log(`❌ Google Shopping search failed:`, shoppingError.message);
+        }
+
+        // Image search (if we still need image)
+        if (!result.image) {
+          try {
+            const googleImageResponse = await axios.get('https://www.googleapis.com/customsearch/v1', {
+              params: {
+                key: googleApiKey,
+                cx: googleCx,
+                q: productName,
+                searchType: 'image',
+                num: 3,
+                safe: 'active'
+              },
+              timeout: 10000
+            });
+            
+            if (googleImageResponse.data && googleImageResponse.data.items && googleImageResponse.data.items.length > 0) {
+              result.image = googleImageResponse.data.items[0].link;
+              console.log('✅ Found image in Google Image Search');
+            }
+          } catch (imageError) {
+            console.log(`❌ Google Image search failed:`, imageError.message);
+          }
+        }
+      } else {
+        console.log('⚠️ Google API Key or CX not configured, skipping Google Custom Search API');
+      }
+    } catch (error) {
+      console.log(`❌ Google Custom Search API failed:`, error.message);
+    }
+
+    // Limit prices to maximum 5
+    if (result.prices && result.prices.length > 5) {
+      const originalLength = result.prices.length;
+      result.prices = result.prices.slice(0, 5);
+      console.log(`✅ Limited prices to 5 (had ${originalLength} prices)`);
+    }
+    
+    console.log('✅ Returning product result from name lookup');
+    return result;
+  } catch (error) {
+    console.error('Product name lookup error:', error);
+    return null;
+  }
+};
+
 // Scan product endpoint
 router.post('/scan', async (req, res) => {
   try {
@@ -707,6 +1036,133 @@ router.post('/scan', async (req, res) => {
     }
   } catch (error) {
     console.error('❌ Scan endpoint error:', error);
+    console.error('📋 Error stack:', error.stack);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// Scan product by image endpoint
+router.post('/scan-image', async (req, res) => {
+  try {
+    console.log('📥 Received scan-image request');
+    const { image_base64, image_uri, latitude, longitude, user_id } = req.body;
+
+    if (!image_base64) {
+      console.error('❌ Image base64 is required');
+      return res.status(400).json({ error: 'Image base64 is required' });
+    }
+    
+    console.log('🔍 Processing image...');
+
+    try {
+      // Step 1: Extract text/product name from image using Google Vision API
+      const productName = await extractTextFromImage(image_base64);
+      
+      if (!productName || productName.trim().length === 0) {
+        console.log('⚠️ Could not extract product name from image');
+        return res.json({
+          success: false,
+          error: 'PRODUCT_NOT_FOUND',
+          message: 'Could not identify product from image',
+        });
+      }
+      
+      console.log('✅ Extracted product name from image:', productName);
+
+      // Step 2: Search for product by name
+      const productInfo = await lookupProductByName(productName);
+      
+      if (!productInfo || productInfo === null) {
+        console.log('❌ Product not found in any API');
+        return res.json({
+          success: false,
+          error: 'PRODUCT_NOT_FOUND',
+          message: 'Product not found in any API',
+          productName: productName
+        });
+      }
+      
+      console.log('📦 Product info from lookup:', productInfo);
+
+      // Step 3: Use the image from the photo if no image found in APIs
+      const finalImageUrl = productInfo.image || image_uri || null;
+      const prices = productInfo.prices || [];
+
+      console.log('💰 Prices from lookup:', prices.length, 'prices found');
+      console.log('🖼️ Image URL:', finalImageUrl);
+
+      // Step 4: Save to database (similar to scan endpoint)
+      // Since we don't have a barcode, we'll use the product name as identifier
+      // Or we can create a product without barcode
+      const name = productInfo.name || productName;
+      const finalImageUrlForDB = (finalImageUrl && typeof finalImageUrl === 'string' && finalImageUrl.trim() !== '') ? finalImageUrl.trim() : null;
+      
+      // Check if product already exists (by name, approximate match)
+      // For now, we'll create a new entry each time since we don't have barcode
+      const platformSuggestions = JSON.stringify([]);
+
+      const insertResult = await pool.query(
+        `INSERT INTO products (name, image_url, brand, category, platform, url, prices, platform_suggestions)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          name,
+          finalImageUrlForDB,
+          productInfo.brand || null,
+          productInfo.category || null,
+          productInfo.platform || null,
+          productInfo.url || null,
+          JSON.stringify(prices),
+          platformSuggestions
+        ]
+      );
+
+      const newProduct = insertResult.rows[0];
+      console.log('✅ Product saved to database:', newProduct.id);
+
+      // Add to scan history
+      try {
+        await pool.query(
+          'INSERT INTO scan_history (product_id, latitude, longitude, user_id) VALUES ($1, $2, $3, $4)',
+          [newProduct.id, latitude || null, longitude || null, user_id || null]
+        );
+        console.log('📍 Location and user saved to scan history');
+      } catch (err) {
+        console.error('⚠️ Error adding to scan history:', err);
+      }
+
+      // Format response (same structure as scan endpoint)
+      const formattedPrices = prices.map(p => ({
+        source: p.source,
+        price: p.price,
+        url: p.url
+      }));
+
+      return res.json({
+        success: true,
+        product: {
+          id: newProduct.id,
+          name: name,
+          barcode: null, // No barcode for image-based scans
+          image: finalImageUrlForDB,
+          price: formattedPrices.length > 0 ? formattedPrices[0].price : null,
+          description: null,
+          brand: productInfo.brand || null,
+          category: productInfo.category || null,
+          platform: productInfo.platform || null,
+          url: productInfo.url || null,
+          prices: formattedPrices,
+          lastScannedAt: new Date().toISOString(),
+          lastScannedLatitude: latitude || null,
+          lastScannedLongitude: longitude || null
+        }
+      });
+    } catch (dbError) {
+      console.error('❌ Database error:', dbError);
+      return res.status(500).json({ error: 'Database error', details: dbError.message });
+    }
+  } catch (error) {
+    console.error('❌ Scan-image endpoint error:', error);
     console.error('📋 Error stack:', error.stack);
     res.status(500).json({ error: 'Internal server error', details: error.message });
   }

@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import ApiService from '../services/api';
@@ -182,6 +183,204 @@ export default function HomeScreen() {
     setTorchEnabled(false); // Reset linterna al abrir escáner
     console.log('✅ Scanner activated');
   };
+
+  const handlePhoto = async () => {
+    try {
+      console.log('📸 handlePhoto called');
+      
+      // Request camera/media library permissions
+      const { status: cameraStatus } = await ImagePicker.requestCameraPermissionsAsync();
+      const { status: mediaStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (cameraStatus !== 'granted' && mediaStatus !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'Camera and media library permissions are required to take or select photos.'
+        );
+        return;
+      }
+
+      // Show action sheet to choose between camera or gallery
+      Alert.alert(
+        'Select Photo',
+        'Choose an option',
+        [
+          {
+            text: 'Camera',
+            onPress: async () => {
+              try {
+                const result = await ImagePicker.launchCameraAsync({
+                  mediaTypes: ['images'],
+                  allowsEditing: true,
+                  quality: 0.8,
+                  base64: true,
+                });
+
+                if (!result.canceled && result.assets && result.assets[0]) {
+                  await processPhotoImage(result.assets[0]);
+                }
+              } catch (error) {
+                console.error('Camera error:', error);
+                Alert.alert('Error', 'Failed to take photo. Please try again.');
+              }
+            },
+          },
+          {
+            text: 'Gallery',
+            onPress: async () => {
+              try {
+                const result = await ImagePicker.launchImageLibraryAsync({
+                  mediaTypes: ['images'],
+                  allowsEditing: true,
+                  quality: 0.8,
+                  base64: true,
+                  legacy: true, // For Android 13/14 compatibility
+                });
+
+                if (!result.canceled && result.assets && result.assets[0]) {
+                  await processPhotoImage(result.assets[0]);
+                }
+              } catch (error) {
+                console.error('Gallery error:', error);
+                Alert.alert('Error', 'Failed to select photo. Please try again.');
+              }
+            },
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Photo picker error:', error);
+      Alert.alert('Error', 'Failed to open photo picker. Please try again.');
+    }
+  };
+
+  const processPhotoImage = React.useCallback(async (imageAsset) => {
+    try {
+      console.log('📸 Processing photo image');
+      setLoading(true);
+      setIsProcessing(true);
+      
+      // Get current location
+      let latitude = null;
+      let longitude = null;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({});
+          latitude = location.coords.latitude;
+          longitude = location.coords.longitude;
+          console.log('📍 Location obtained:', { latitude, longitude });
+        } else {
+          console.log('⚠️ Location permission denied');
+        }
+      } catch (locationError) {
+        console.error('⚠️ Error getting location:', locationError);
+      }
+      
+      // Get current user ID
+      const user = await AuthService.getUser();
+      const userId = user ? user.id : null;
+      
+      // Prepare image data (base64)
+      const imageBase64 = imageAsset.base64;
+      const imageUri = imageAsset.uri;
+      
+      // Call API to scan product by image
+      const response = await ApiService.scanProductByImage(
+        imageBase64,
+        imageUri,
+        latitude,
+        longitude,
+        userId
+      );
+      
+      if (response && response.success && response.product) {
+        console.log('💰 Prices received:', response.product.prices?.length || 0, 'prices');
+        // Limit prices to 5 in frontend
+        if (response.product.prices && response.product.prices.length > 5) {
+          response.product.prices = response.product.prices.slice(0, 5);
+        }
+        setScannedProduct(response.product);
+      } else if (response && response.success === false && response.error === 'PRODUCT_NOT_FOUND') {
+        console.log('❌ Product not found in any API');
+        setScannedProduct({
+          barcode: null,
+          name: 'Product Not Found',
+          price: null,
+          image: imageUri, // Show the photo they took
+          description: 'Not found in any API',
+          suggestions: [],
+          notFound: true
+        });
+      } else {
+        // Even if API fails, show the photo with search options
+        const localProduct = {
+          barcode: null,
+          name: 'Product from Photo',
+          price: null,
+          image: imageUri,
+          description: null,
+          suggestions: [
+            {
+              platform: 'Google Lens',
+              url: `https://lens.google.com/search?ep=gisbubb&hl=en&re=df&p=${encodeURIComponent(imageUri)}`,
+              name: 'Search on Google Lens'
+            },
+            {
+              platform: 'Google',
+              url: `https://www.google.com/searchbyimage?image_url=${encodeURIComponent(imageUri)}`,
+              name: 'Search on Google'
+            }
+          ]
+        };
+        setScannedProduct(localProduct);
+      }
+    } catch (error) {
+      console.error('Photo processing error:', error);
+      
+      // Check if it's a network error
+      const isNetworkError = error.message?.includes('Network request failed') || 
+                             error.message?.includes('timeout') ||
+                             error.name === 'TypeError';
+      
+      if (isNetworkError) {
+        Alert.alert(
+          'Server Connection Failed',
+          'Could not connect to the server. The photo will be displayed with search options.\n\nMake sure the backend is running and localtunnel is active.',
+          [{ text: 'OK' }]
+        );
+      }
+      
+      // Show the photo with search options even if connection fails
+      const localProduct = {
+        barcode: null,
+        name: 'Product from Photo',
+        price: null,
+        image: imageAsset.uri,
+        description: 'Information unavailable (server connection failed)',
+        suggestions: [
+          {
+            platform: 'Google Lens',
+            url: `https://lens.google.com/search?ep=gisbubb&hl=en&re=df&p=${encodeURIComponent(imageAsset.uri)}`,
+            name: 'Search on Google Lens'
+          },
+          {
+            platform: 'Google',
+            url: `https://www.google.com/searchbyimage?image_url=${encodeURIComponent(imageAsset.uri)}`,
+            name: 'Search on Google'
+          }
+        ]
+      };
+      setScannedProduct(localProduct);
+    } finally {
+      setLoading(false);
+      setIsProcessing(false);
+    }
+  }, []);
 
   const processScannedCode = React.useCallback(async (barcodeData) => {
     try {
@@ -650,7 +849,7 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Scan Button and History Button in same row */}
+        {/* Scan Button, Photo Button and History Button in same row */}
         <View style={styles.scanButtonsRow}>
           <TouchableOpacity
             style={[styles.scanButton, styles.scanButtonFlex]}
@@ -661,6 +860,18 @@ export default function HomeScreen() {
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.scanButtonText}>SCAN</Text>
+            )}
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.photoButton, styles.scanButtonFlex]}
+            onPress={handlePhoto}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.scanButtonText}>PHOTO</Text>
             )}
           </TouchableOpacity>
           
@@ -763,7 +974,9 @@ export default function HomeScreen() {
                   <View style={styles.notFoundOverlayContent}>
                     <Text style={styles.notFoundOverlayTitle}>Product Not Found</Text>
                     <Text style={styles.notFoundOverlayText}>
-                      Code {scannedProduct.barcode} not found in any API
+                      {scannedProduct.barcode 
+                        ? `Code ${scannedProduct.barcode} not found in any API`
+                        : 'Product not found in any API'}
                     </Text>
                     <Text style={styles.notFoundOverlaySubtext}>
                       No record saved
@@ -974,6 +1187,21 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     letterSpacing: 1.5,
+  },
+  photoButton: {
+    backgroundColor: '#4CAF50',
+    paddingVertical: 18,
+    paddingHorizontal: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   historyButton: {
     backgroundColor: '#1a1a1a',
