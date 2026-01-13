@@ -422,80 +422,7 @@ const lookupBarcode = async (barcode) => {
   }
 };
 
-// Generate JWT token for Google Service Account authentication
-const generateJWT = () => {
-  const crypto = require('crypto');
-  let privateKey = process.env.GOOGLE_VISION_PRIVATE_KEY;
-  const clientEmail = process.env.GOOGLE_VISION_CLIENT_EMAIL;
-
-  console.log('🔧 Generating JWT with:');
-  console.log('📧 Client email:', clientEmail);
-  console.log('🔑 Raw private key length:', privateKey ? privateKey.length : 'null');
-
-  if (!privateKey || !clientEmail) {
-    throw new Error('GOOGLE_VISION_PRIVATE_KEY and GOOGLE_VISION_CLIENT_EMAIL are required');
-  }
-
-  // Process the private key - replace \n with actual newlines
-  privateKey = privateKey.replace(/\\n/g, '\n');
-  console.log('🔑 Processed private key length:', privateKey.length);
-  console.log('🔑 Private key starts with:', privateKey.substring(0, 30));
-  console.log('🔑 Private key ends with:', privateKey.substring(privateKey.length - 30));
-
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    iss: clientEmail,
-    scope: 'https://www.googleapis.com/auth/cloud-vision',
-    aud: 'https://oauth2.googleapis.com/token',
-    exp: now + 3600, // 1 hour
-    iat: now
-  };
-
-  const header = {
-    alg: 'RS256',
-    typ: 'JWT'
-  };
-
-  const encodeBase64 = (obj) => {
-    return Buffer.from(JSON.stringify(obj)).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  };
-
-  const jwtHeader = encodeBase64(header);
-  const jwtPayload = encodeBase64(payload);
-
-  const message = `${jwtHeader}.${jwtPayload}`;
-  const signer = crypto.createSign('RSA-SHA256');
-  signer.update(message);
-
-  // Remove header/footer from private key and format properly
-  const privateKeyFormatted = privateKey.replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '').replace(/\n/g, '');
-  const privateKeyBuffer = Buffer.from(privateKeyFormatted, 'base64');
-
-  const signature = signer.sign(privateKeyBuffer, 'base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-
-  return `${message}.${signature}`;
-};
-
-// Get access token using JWT
-const getAccessToken = async () => {
-  try {
-    console.log('🔑 Generating JWT token...');
-    const jwt = generateJWT();
-    console.log('✅ JWT generated, length:', jwt.length);
-
-    console.log('🌐 Requesting access token from Google...');
-    const response = await axios.post('https://oauth2.googleapis.com/token', {
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: jwt
-    });
-
-    console.log('✅ Access token obtained');
-    return response.data.access_token;
-  } catch (error) {
-    console.error('❌ Error getting access token:', error.response?.data || error.message);
-    return null;
-  }
-};
+// Removed complex JWT/OAuth functions - now using simple API key
 
 // Search products by image using Google Vision API (WEB_DETECTION for visual search)
 const searchProductByImage = async (imageBase64) => {
@@ -503,38 +430,18 @@ const searchProductByImage = async (imageBase64) => {
     console.log('🚨🚨🚨 GOOGLE VISION FUNCTION CALLED 🚨🚨🚨');
     console.log('🔍 Starting Google Vision API call...');
     console.log('🔧 Environment check:');
-    console.log('   - GOOGLE_VISION_PRIVATE_KEY exists:', !!process.env.GOOGLE_VISION_PRIVATE_KEY);
-    console.log('   - GOOGLE_VISION_PRIVATE_KEY length:', process.env.GOOGLE_VISION_PRIVATE_KEY ? process.env.GOOGLE_VISION_PRIVATE_KEY.length : 'N/A');
-    console.log('   - GOOGLE_VISION_CLIENT_EMAIL exists:', !!process.env.GOOGLE_VISION_CLIENT_EMAIL);
-    console.log('   - GOOGLE_VISION_CLIENT_EMAIL value:', process.env.GOOGLE_VISION_CLIENT_EMAIL || 'N/A');
     console.log('   - GOOGLE_API_KEY exists:', !!process.env.GOOGLE_API_KEY);
+    console.log('   - GOOGLE_API_KEY value:', process.env.GOOGLE_API_KEY ? '[CONFIGURED]' : 'N/A');
 
-    // Try service account authentication first, fallback to API key
-    let accessToken = null;
-    let visionApiUrl;
-
-    if (process.env.GOOGLE_VISION_PRIVATE_KEY && process.env.GOOGLE_VISION_CLIENT_EMAIL) {
-      console.log('🔐 Using service account authentication');
-      console.log('📧 Client email:', process.env.GOOGLE_VISION_CLIENT_EMAIL);
-      console.log('🔑 Private key length:', process.env.GOOGLE_VISION_PRIVATE_KEY.length);
-      accessToken = await getAccessToken();
-      if (!accessToken) {
-        console.log('❌ Failed to get access token');
-        return null;
-      }
-      console.log('✅ Got access token, length:', accessToken.length);
-      visionApiUrl = 'https://vision.googleapis.com/v1/images:annotate';
-    } else {
-      console.log('⚠️ No service account configured, checking API key...');
-      const visionApiKey = process.env.GOOGLE_API_KEY;
-      if (visionApiKey && visionApiKey !== 'your-google-api-key-here') {
-        console.log('🔑 Using API key authentication');
-        visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
-      } else {
-        console.log('❌ No valid authentication method found');
-        return null;
-      }
+    // Use simple API key authentication (much easier!)
+    const visionApiKey = process.env.GOOGLE_API_KEY;
+    if (!visionApiKey || visionApiKey === 'your-google-api-key-here') {
+      console.log('❌ GOOGLE_API_KEY not configured properly');
+      return null;
     }
+
+    console.log('🔑 Using simple API key authentication');
+    const visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
 
     const requestBody = {
       requests: [
@@ -559,11 +466,6 @@ const searchProductByImage = async (imageBase64) => {
     const headers = {
       'Content-Type': 'application/json'
     };
-
-    // Add Bearer token if using service account
-    if (accessToken) {
-      headers['Authorization'] = `Bearer ${accessToken}`;
-    }
 
     console.log('🌐 Calling Google Vision API...');
     console.log('🔗 URL:', visionApiUrl);
