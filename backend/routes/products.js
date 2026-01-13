@@ -494,7 +494,14 @@ const getAccessToken = async () => {
 // Search products by image using Google Vision API (WEB_DETECTION for visual search)
 const searchProductByImage = async (imageBase64) => {
   try {
+    console.log('🚨🚨🚨 GOOGLE VISION FUNCTION CALLED 🚨🚨🚨');
     console.log('🔍 Starting Google Vision API call...');
+    console.log('🔧 Environment check:');
+    console.log('   - GOOGLE_VISION_PRIVATE_KEY exists:', !!process.env.GOOGLE_VISION_PRIVATE_KEY);
+    console.log('   - GOOGLE_VISION_PRIVATE_KEY length:', process.env.GOOGLE_VISION_PRIVATE_KEY ? process.env.GOOGLE_VISION_PRIVATE_KEY.length : 'N/A');
+    console.log('   - GOOGLE_VISION_CLIENT_EMAIL exists:', !!process.env.GOOGLE_VISION_CLIENT_EMAIL);
+    console.log('   - GOOGLE_VISION_CLIENT_EMAIL value:', process.env.GOOGLE_VISION_CLIENT_EMAIL || 'N/A');
+    console.log('   - GOOGLE_API_KEY exists:', !!process.env.GOOGLE_API_KEY);
 
     // Try service account authentication first, fallback to API key
     let accessToken = null;
@@ -503,17 +510,19 @@ const searchProductByImage = async (imageBase64) => {
     if (process.env.GOOGLE_VISION_PRIVATE_KEY && process.env.GOOGLE_VISION_CLIENT_EMAIL) {
       console.log('🔐 Using service account authentication');
       console.log('📧 Client email:', process.env.GOOGLE_VISION_CLIENT_EMAIL);
+      console.log('🔑 Private key length:', process.env.GOOGLE_VISION_PRIVATE_KEY.length);
       accessToken = await getAccessToken();
       if (!accessToken) {
         console.log('❌ Failed to get access token');
         return null;
       }
-      console.log('✅ Got access token');
+      console.log('✅ Got access token, length:', accessToken.length);
       visionApiUrl = 'https://vision.googleapis.com/v1/images:annotate';
     } else {
       console.log('⚠️ No service account configured, checking API key...');
-      const visionApiKey = process.env.GOOGLE_VISION_API_KEY;
-      if (visionApiKey && visionApiKey !== 'your-google-vision-api-key-here') {
+      const visionApiKey = process.env.GOOGLE_API_KEY;
+      if (visionApiKey && visionApiKey !== 'your-google-api-key-here') {
+        console.log('🔑 Using API key authentication');
         visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
       } else {
         console.log('❌ No valid authentication method found');

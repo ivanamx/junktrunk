@@ -20,6 +20,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Log environment variables on startup
+console.log('🔧 Environment variables check:');
+console.log('   - GOOGLE_VISION_PRIVATE_KEY exists:', !!process.env.GOOGLE_VISION_PRIVATE_KEY);
+console.log('   - GOOGLE_VISION_CLIENT_EMAIL exists:', !!process.env.GOOGLE_VISION_CLIENT_EMAIL);
+console.log('   - GOOGLE_API_KEY exists:', !!process.env.GOOGLE_API_KEY);
+
 // Import routes
 const productRoutes = require('./routes/products');
 const platformRoutes = require('./routes/platforms');
