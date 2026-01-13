@@ -428,6 +428,10 @@ const generateJWT = () => {
   const privateKey = process.env.GOOGLE_VISION_PRIVATE_KEY;
   const clientEmail = process.env.GOOGLE_VISION_CLIENT_EMAIL;
 
+  console.log('🔧 Generating JWT with:');
+  console.log('📧 Client email:', clientEmail);
+  console.log('🔑 Private key length:', privateKey ? privateKey.length : 'null');
+
   if (!privateKey || !clientEmail) {
     throw new Error('GOOGLE_VISION_PRIVATE_KEY and GOOGLE_VISION_CLIENT_EMAIL are required');
   }
@@ -469,16 +473,20 @@ const generateJWT = () => {
 // Get access token using JWT
 const getAccessToken = async () => {
   try {
+    console.log('🔑 Generating JWT token...');
     const jwt = generateJWT();
+    console.log('✅ JWT generated, length:', jwt.length);
 
+    console.log('🌐 Requesting access token from Google...');
     const response = await axios.post('https://oauth2.googleapis.com/token', {
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
       assertion: jwt
     });
 
+    console.log('✅ Access token obtained');
     return response.data.access_token;
   } catch (error) {
-    console.error('Error getting access token:', error.response?.data || error.message);
+    console.error('❌ Error getting access token:', error.response?.data || error.message);
     return null;
   }
 };
@@ -486,21 +494,31 @@ const getAccessToken = async () => {
 // Search products by image using Google Vision API (WEB_DETECTION for visual search)
 const searchProductByImage = async (imageBase64) => {
   try {
-    const visionApiKey = process.env.GOOGLE_VISION_API_KEY;
+    console.log('🔍 Starting Google Vision API call...');
 
     // Try service account authentication first, fallback to API key
     let accessToken = null;
     let visionApiUrl;
 
     if (process.env.GOOGLE_VISION_PRIVATE_KEY && process.env.GOOGLE_VISION_CLIENT_EMAIL) {
-      // Use service account authentication
+      console.log('🔐 Using service account authentication');
+      console.log('📧 Client email:', process.env.GOOGLE_VISION_CLIENT_EMAIL);
       accessToken = await getAccessToken();
+      if (!accessToken) {
+        console.log('❌ Failed to get access token');
+        return null;
+      }
+      console.log('✅ Got access token');
       visionApiUrl = 'https://vision.googleapis.com/v1/images:annotate';
-    } else if (visionApiKey && visionApiKey !== 'your-google-vision-api-key-here') {
-      // Fallback to API key
-      visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
     } else {
-      return null;
+      console.log('⚠️ No service account configured, checking API key...');
+      const visionApiKey = process.env.GOOGLE_VISION_API_KEY;
+      if (visionApiKey && visionApiKey !== 'your-google-vision-api-key-here') {
+        visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
+      } else {
+        console.log('❌ No valid authentication method found');
+        return null;
+      }
     }
 
     const requestBody = {
@@ -532,16 +550,25 @@ const searchProductByImage = async (imageBase64) => {
       headers['Authorization'] = `Bearer ${accessToken}`;
     }
 
+    console.log('🌐 Calling Google Vision API...');
+    console.log('🔗 URL:', visionApiUrl);
+    console.log('📨 Headers:', JSON.stringify(headers, null, 2));
+
     const response = await axios.post(visionApiUrl, requestBody, {
       headers: headers,
       timeout: 20000
     });
 
+    console.log('✅ Google Vision API response received');
+    console.log('📊 Response status:', response.status);
+
     if (!response.data || !response.data.responses || response.data.responses.length === 0) {
+      console.log('❌ No responses in Vision API response');
       return null;
     }
 
     const visionResponse = response.data.responses[0];
+    console.log('🔍 Processing vision response...');
     
     // Extract product information from web detection results
     let productInfo = {
@@ -605,8 +632,14 @@ const searchProductByImage = async (imageBase64) => {
     // Build product name from best available information
     if (!productInfo.name && productInfo.labels.length > 0) {
       productInfo.name = productInfo.labels[0];
+      console.log('✅ Using label as product name:', productInfo.name);
     }
 
+    console.log('📊 Final product info:', {
+      name: productInfo.name,
+      urls: productInfo.urls.length,
+      labels: productInfo.labels.length
+    });
 
     return productInfo;
   } catch (error) {
@@ -1196,10 +1229,13 @@ router.post('/scan-image', async (req, res) => {
     }
 
     try {
+      console.log('🔍 Step 1: Calling searchProductByImage...');
       // Step 1: Search products by image using Google Vision WEB_DETECTION
       const visualSearchResult = await searchProductByImage(image_base64);
-      
+      console.log('📊 Visual search result:', visualSearchResult);
+
       if (!visualSearchResult || !visualSearchResult.urls || visualSearchResult.urls.length === 0) {
+        console.log('❌ No visual search results or URLs found');
         // Fallback: try text-based search if visual search fails
         const productName = visualSearchResult?.name || visualSearchResult?.labels?.[0] || null;
         
