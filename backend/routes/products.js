@@ -1099,21 +1099,18 @@ router.post('/scan-image', async (req, res) => {
       
       // Check if product already exists (by name, approximate match)
       // For now, we'll create a new entry each time since we don't have barcode
+      // Use same columns as /scan endpoint to avoid database errors
       const platformSuggestions = JSON.stringify([]);
 
       const insertResult = await pool.query(
-        `INSERT INTO products (name, image_url, brand, category, platform, url, prices, platform_suggestions)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO products (name, image_url, platform_suggestions, prices)
+         VALUES ($1, $2, $3, $4)
          RETURNING *`,
         [
           name,
           finalImageUrlForDB,
-          productInfo.brand || null,
-          productInfo.category || null,
-          productInfo.platform || null,
-          productInfo.url || null,
-          JSON.stringify(prices),
-          platformSuggestions
+          platformSuggestions,
+          JSON.stringify(prices)
         ]
       );
 

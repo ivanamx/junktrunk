@@ -61,6 +61,20 @@ async function initializeDatabase() {
       console.log('Note: prices column may already exist');
     }
 
+    // Add brand, category, platform, and url columns if they don't exist (for existing databases)
+    try {
+      await pool.query(`
+        ALTER TABLE products 
+        ADD COLUMN IF NOT EXISTS brand TEXT,
+        ADD COLUMN IF NOT EXISTS category TEXT,
+        ADD COLUMN IF NOT EXISTS platform TEXT,
+        ADD COLUMN IF NOT EXISTS url TEXT
+      `);
+    } catch (err) {
+      // Columns might already exist, ignore error
+      console.log('Note: brand, category, platform, or url columns may already exist');
+    }
+
     // Create scan_history table if it doesn't exist
     await pool.query(`
       CREATE TABLE IF NOT EXISTS scan_history (
