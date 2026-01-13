@@ -22,7 +22,9 @@ app.use((req, res, next) => {
 
 // Log environment variables on startup
 console.log('🔧 Environment variables check:');
-console.log('   - GOOGLE_API_KEY exists:', !!process.env.GOOGLE_API_KEY);
+console.log('   - CLARIFAI_API_KEY exists:', !!process.env.CLARIFAI_API_KEY);
+console.log('   - CLARIFAI_USER_ID exists:', !!process.env.CLARIFAI_USER_ID);
+console.log('   - CLARIFAI_APP_ID exists:', !!process.env.CLARIFAI_APP_ID);
 
 // Import routes
 const productRoutes = require('./routes/products');

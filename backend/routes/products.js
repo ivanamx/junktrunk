@@ -425,196 +425,118 @@ const lookupBarcode = async (barcode) => {
 // Removed complex JWT/OAuth functions - now using simple API key
 
 // Search products by image using Google Vision API (WEB_DETECTION for visual search)
+// Search products by image using Clarifai API (better than Google Vision)
 const searchProductByImage = async (imageBase64) => {
   try {
-    console.log('🚨🚨🚨 GOOGLE VISION FUNCTION CALLED 🚨🚨🚨');
-    console.log('🔍 Starting Google Vision API call...');
-    console.log('🔧 Environment check:');
-    console.log('   - GOOGLE_API_KEY exists:', !!process.env.GOOGLE_API_KEY);
-    console.log('   - GOOGLE_API_KEY value:', process.env.GOOGLE_API_KEY ? '[CONFIGURED]' : 'N/A');
+    console.log('🤖 CLARIFAI FUNCTION CALLED');
+    console.log('🔍 Starting Clarifai API call...');
 
-    // Use simple API key authentication (much easier!)
-    const visionApiKey = process.env.GOOGLE_API_KEY;
-    if (!visionApiKey || visionApiKey === 'your-google-api-key-here') {
-      console.log('❌ GOOGLE_API_KEY not configured properly');
+    // Check Clarifai configuration
+    const apiKey = process.env.CLARIFAI_API_KEY;
+    const userId = process.env.CLARIFAI_USER_ID;
+    const appId = process.env.CLARIFAI_APP_ID;
+
+    console.log('🔧 Clarifai config check:');
+    console.log('   - API_KEY exists:', !!apiKey);
+    console.log('   - USER_ID exists:', !!userId);
+    console.log('   - APP_ID exists:', !!appId);
+
+    if (!apiKey || !userId || !appId ||
+        apiKey === 'your-clarifai-api-key-here' ||
+        userId === 'your-clarifai-user-id-here' ||
+        appId === 'your-clarifai-app-id-here') {
+      console.log('❌ Clarifai not configured properly');
       return null;
     }
 
-    console.log('🔑 Using simple API key authentication');
-    const visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
+    // Initialize Clarifai
+    const { ClarifaiStub, grpc } = require('clarifai');
+    const stub = ClarifaiStub.grpc();
+    const metadata = new grpc.Metadata();
+    metadata.set('authorization', `Key ${apiKey}`);
 
-    const requestBody = {
-      requests: [
+    // Use General model for product recognition
+    const request = {
+      user_app_id: {
+        user_id: userId,
+        app_id: appId
+      },
+      inputs: [
         {
-          image: {
-            content: imageBase64
-          },
-          features: [
-            {
-              type: 'PRODUCT_SEARCH',
-              maxResults: 10
-            },
-            {
-              type: 'WEB_DETECTION',
-              maxResults: 10
-            },
-            {
-              type: 'LABEL_DETECTION',
-              maxResults: 10
-            },
-            {
-              type: 'TEXT_DETECTION',
-              maxResults: 10
+          data: {
+            image: {
+              base64: imageBase64
             }
-          ]
+          }
         }
-      ]
+      ],
+      model_id: 'general-image-recognition' // General model for broad recognition
     };
 
-    const headers = {
-      'Content-Type': 'application/json'
-    };
+    console.log('🌐 Calling Clarifai API...');
 
-    console.log('🌐 Calling Google Vision API...');
-    console.log('🔗 URL:', visionApiUrl);
-    console.log('📨 Headers:', JSON.stringify(headers, null, 2));
-
-    const response = await axios.post(visionApiUrl, requestBody, {
-      headers: headers,
-      timeout: 20000
-    });
-
-    console.log('✅ Google Vision API response received');
-    console.log('📊 Response status:', response.status);
-
-    if (!response.data || !response.data.responses || response.data.responses.length === 0) {
-      console.log('❌ No responses in Vision API response');
-      return null;
-    }
-
-    const visionResponse = response.data.responses[0];
-    console.log('🔍 Processing vision response...');
-    
-    // Extract product information from web detection results
-    let productInfo = {
-      name: null,
-      urls: [],
-      labels: []
-    };
-
-    // Process PRODUCT_SEARCH results (best for product recognition)
-    if (visionResponse.productSearchResults) {
-      console.log('🛍️ Product search results found');
-
-      if (visionResponse.productSearchResults.results) {
-        visionResponse.productSearchResults.results.forEach(result => {
-          if (result.product && result.product.displayName) {
-            if (!productInfo.name) {
-              productInfo.name = result.product.displayName;
-              console.log('✅ Product name from PRODUCT_SEARCH:', productInfo.name);
-            }
-          }
-
-          if (result.product && result.product.productCategory) {
-            productInfo.labels.push(result.product.productCategory);
-          }
-
-          // Add URLs from product search
-          if (result.image) {
-            productInfo.urls.push(result.image.uri);
-          }
-        });
-      }
-    }
-
-    // Get web pages with similar images (these are likely product pages)
-    if (visionResponse.webDetection) {
-      // Pages with matching images (most relevant)
-      if (visionResponse.webDetection.pagesWithMatchingImages) {
-        visionResponse.webDetection.pagesWithMatchingImages.forEach(page => {
-          if (page.url) {
-            productInfo.urls.push(page.url);
-          }
-        });
-      }
-      
-      // Full matching images (product listings)
-      if (visionResponse.webDetection.fullMatchingImages) {
-        visionResponse.webDetection.fullMatchingImages.forEach(image => {
-          if (image.url) {
-            productInfo.urls.push(image.url);
-          }
-        });
-      }
-      
-      // Partial matching images
-      if (visionResponse.webDetection.partialMatchingImages) {
-        visionResponse.webDetection.partialMatchingImages.forEach(image => {
-          if (image.url) {
-            productInfo.urls.push(image.url);
-          }
-        });
-      }
-      
-      // Web entities (detected products/objects)
-      if (visionResponse.webDetection.webEntities) {
-        visionResponse.webDetection.webEntities.forEach(entity => {
-          if (entity.description && entity.description.length > 3) {
-            // Use the most relevant entity as product name
-            if (!productInfo.name && entity.score > 0.5) {
-              productInfo.name = entity.description;
-            }
-          }
-        });
-      }
-    }
-
-    // Get labels (object/product type detection)
-    if (visionResponse.labelAnnotations) {
-      visionResponse.labelAnnotations.forEach(label => {
-        if (label.description && label.score > 0.7) {
-          productInfo.labels.push(label.description);
+    return new Promise((resolve, reject) => {
+      stub.PostModelOutputs(request, metadata, (err, response) => {
+        if (err) {
+          console.error('❌ Clarifai API error:', err.message);
+          resolve(null);
+          return;
         }
+
+        console.log('✅ Clarifai API response received');
+
+        if (!response.outputs || response.outputs.length === 0) {
+          console.log('❌ No outputs from Clarifai');
+          resolve(null);
+          return;
+        }
+
+        const output = response.outputs[0];
+        let productInfo = {
+          name: null,
+          urls: [],
+          labels: []
+        };
+
+        // Process concepts (tags/labels from Clarifai)
+        if (output.data && output.data.concepts) {
+          console.log('🏷️ Found concepts:', output.data.concepts.length);
+
+          // Sort by confidence and get top results
+          const sortedConcepts = output.data.concepts
+            .sort((a, b) => (b.value || 0) - (a.value || 0))
+            .slice(0, 10);
+
+          sortedConcepts.forEach(concept => {
+            if (concept.name && concept.value > 0.8) { // High confidence threshold
+              productInfo.labels.push(concept.name);
+
+              // Use the highest confidence concept as product name if it's meaningful
+              if (!productInfo.name && concept.name.length > 3 && concept.value > 0.95) {
+                productInfo.name = concept.name;
+                console.log('✅ Product name from Clarifai:', productInfo.name);
+              }
+            }
+          });
+
+          // If no high-confidence name found, use the top concept
+          if (!productInfo.name && sortedConcepts.length > 0) {
+            productInfo.name = sortedConcepts[0].name;
+            console.log('✅ Using top concept as product name:', productInfo.name);
+          }
+        }
+
+        console.log('📊 Final product info:', {
+          name: productInfo.name,
+          labels: productInfo.labels.length
+        });
+
+        resolve(productInfo);
       });
-    }
-
-    // Get text from image (for model numbers, specs, etc.)
-    if (visionResponse.textAnnotations && visionResponse.textAnnotations.length > 0) {
-      console.log('📝 Found text in image');
-      const text = visionResponse.textAnnotations[0].description || '';
-
-      // Look for product identifiers in text (model numbers, specs, etc.)
-      const lines = text.split('\n').filter(line => line.trim().length > 0);
-      for (const line of lines.slice(0, 5)) {
-        const trimmedLine = line.trim();
-        // Look for meaningful text (not just numbers, not too short/long)
-        if (trimmedLine.length > 3 && trimmedLine.length < 100 &&
-            !/^\d{1,3}(\.\d{1,2})?$/.test(trimmedLine) && // Not just prices
-            !trimmedLine.includes('http')) { // Not URLs
-          if (!productInfo.name) {
-            productInfo.name = trimmedLine;
-            console.log('✅ Product name from text:', productInfo.name);
-            break;
-          }
-        }
-      }
-    }
-
-
-    // Build product name from best available information
-    if (!productInfo.name && productInfo.labels.length > 0) {
-      productInfo.name = productInfo.labels[0];
-      console.log('✅ Using label as product name:', productInfo.name);
-    }
-
-    console.log('📊 Final product info:', {
-      name: productInfo.name,
-      urls: productInfo.urls.length,
-      labels: productInfo.labels.length
     });
 
-    return productInfo;
   } catch (error) {
+    console.error('❌ Clarifai function error:', error.message);
     return null;
   }
 };
