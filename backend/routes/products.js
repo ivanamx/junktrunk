@@ -474,6 +474,10 @@ const searchProductByImage = async (imageBase64) => {
     }
 
     const visionResponse = response.data.responses[0];
+    
+    // Debug: ver qué devuelve Google Vision
+    console.log('📊 Google Vision response structure:', JSON.stringify(visionResponse, null, 2));
+    
     let productInfo = {
       name: null,
       urls: [],
@@ -483,49 +487,80 @@ const searchProductByImage = async (imageBase64) => {
     // Process WEB_DETECTION (similar to Google Lens)
     if (visionResponse.webDetection) {
       const webDetection = visionResponse.webDetection;
+      console.log('🔍 WebDetection structure:', {
+        hasWebEntities: !!webDetection.webEntities,
+        webEntitiesCount: webDetection.webEntities?.length || 0,
+        hasPagesWithMatchingImages: !!webDetection.pagesWithMatchingImages,
+        pagesCount: webDetection.pagesWithMatchingImages?.length || 0,
+        hasFullMatchingImages: !!webDetection.fullMatchingImages,
+        fullMatchingCount: webDetection.fullMatchingImages?.length || 0,
+        hasPartialMatchingImages: !!webDetection.partialMatchingImages,
+        partialMatchingCount: webDetection.partialMatchingImages?.length || 0
+      });
 
-      // Get web entities (product names/descriptions)
+      // Get web entities (product names/descriptions) - mejor procesamiento
       if (webDetection.webEntities && webDetection.webEntities.length > 0) {
-        // Find the best product name (usually the first entity with high score)
+        // Filtrar y ordenar entidades para obtener el mejor nombre de producto
         const sortedEntities = webDetection.webEntities
           .sort((a, b) => (b.score || 0) - (a.score || 0))
-          .filter(e => e.description && e.description.length > 3);
+          .filter(e => {
+            const desc = (e.description || '').toLowerCase();
+            // Filtrar descripciones genéricas como "small appliance", "product", etc.
+            return e.description && 
+                   e.description.length > 3 && 
+                   !desc.includes('appliance') && 
+                   !desc.includes('product') &&
+                   !desc.includes('item') &&
+                   !desc.includes('object');
+          });
 
-        if (sortedEntities.length > 0) {
+        // Si encontramos entidades específicas, usar la mejor
+        if (sortedEntities.length > 0 && sortedEntities[0].score > 0.7) {
           productInfo.name = sortedEntities[0].description;
           console.log('✅ Product name from Google Vision:', productInfo.name);
 
-          // Add other entities as labels
+          // Agregar otras entidades como labels
           sortedEntities.slice(1, 6).forEach(entity => {
             if (entity.description && entity.score > 0.5) {
               productInfo.labels.push(entity.description);
             }
           });
+        } else {
+          // Si no hay entidades específicas, usar la mejor disponible pero buscar mejor nombre después
+          const allEntities = webDetection.webEntities
+            .sort((a, b) => (b.score || 0) - (a.score || 0))
+            .filter(e => e.description && e.description.length > 3);
+          
+          if (allEntities.length > 0) {
+            productInfo.name = allEntities[0].description;
+            console.log('⚠️ Using generic name from Google Vision:', productInfo.name);
+          }
         }
       }
 
-      // Get pages with matching images (product pages)
+      // Get pages with matching images (product pages) - URLs más importantes
       if (webDetection.pagesWithMatchingImages && webDetection.pagesWithMatchingImages.length > 0) {
         webDetection.pagesWithMatchingImages.forEach(page => {
-          if (page.url) {
+          if (page.url && !productInfo.urls.includes(page.url)) {
             productInfo.urls.push(page.url);
           }
         });
         console.log(`✅ Found ${productInfo.urls.length} matching pages from Google Vision`);
       }
 
-      // Get full matching images (more product URLs)
+      // Get full matching images (más URLs de productos)
       if (webDetection.fullMatchingImages && webDetection.fullMatchingImages.length > 0) {
         webDetection.fullMatchingImages.forEach(image => {
           if (image.url && !productInfo.urls.includes(image.url)) {
             productInfo.urls.push(image.url);
           }
         });
+        console.log(`✅ Found ${productInfo.urls.length} total URLs (including full matches)`);
       }
 
-      // Get partial matching images
+      // Get partial matching images (limitado para no saturar)
       if (webDetection.partialMatchingImages && webDetection.partialMatchingImages.length > 0) {
-        webDetection.partialMatchingImages.slice(0, 5).forEach(image => {
+        webDetection.partialMatchingImages.slice(0, 10).forEach(image => {
           if (image.url && !productInfo.urls.includes(image.url)) {
             productInfo.urls.push(image.url);
           }
@@ -533,20 +568,90 @@ const searchProductByImage = async (imageBase64) => {
       }
     }
 
-    // Process LABEL_DETECTION as fallback
-    if (!productInfo.name && visionResponse.labelAnnotations && visionResponse.labelAnnotations.length > 0) {
+    // Si no encontramos URLs pero tenemos un nombre, buscar en Google Custom Search
+    if (productInfo.urls.length === 0 && productInfo.name) {
+      console.log('🔍 No URLs found, searching Google Custom Search for product URLs...');
+      try {
+        const googleApiKey = process.env.GOOGLE_API_KEY;
+        const googleCx = process.env.GOOGLE_CX;
+
+        if (googleApiKey && googleCx && googleApiKey !== 'your-api-key-here' && googleCx !== 'your-search-engine-id-here') {
+          const googleSearchResponse = await axios.get('https://www.googleapis.com/customsearch/v1', {
+            params: {
+              key: googleApiKey,
+              cx: googleCx,
+              q: `${productInfo.name} buy price shopping`,
+              num: 10,
+              safe: 'active'
+            },
+            timeout: 10000
+          });
+
+          if (googleSearchResponse.data && googleSearchResponse.data.items && googleSearchResponse.data.items.length > 0) {
+            googleSearchResponse.data.items.forEach(item => {
+              if (item.link && !productInfo.urls.includes(item.link)) {
+                productInfo.urls.push(item.link);
+              }
+            });
+            console.log(`✅ Found ${productInfo.urls.length} URLs from Google Custom Search`);
+          }
+        }
+      } catch (searchError) {
+        console.log(`❌ Google Custom Search failed:`, searchError.message);
+      }
+    }
+
+    // Process LABEL_DETECTION - usar labels para mejorar el nombre si es genérico
+    if (visionResponse.labelAnnotations && visionResponse.labelAnnotations.length > 0) {
       const sortedLabels = visionResponse.labelAnnotations
         .sort((a, b) => (b.score || 0) - (a.score || 0))
         .filter(l => l.description && l.description.length > 3);
 
-      if (sortedLabels.length > 0 && sortedLabels[0].score > 0.8) {
+      // Si el nombre es genérico, intentar construir uno mejor con labels
+      if (productInfo.name && (
+        productInfo.name.toLowerCase().includes('appliance') ||
+        productInfo.name.toLowerCase().includes('product') ||
+        productInfo.name.toLowerCase().includes('item') ||
+        productInfo.name.toLowerCase().includes('object')
+      )) {
+        // Construir nombre mejor usando labels
+        const brandLabels = sortedLabels.filter(l => 
+          l.description && (
+            l.description.toLowerCase().includes('oster') ||
+            l.description.toLowerCase().includes('samsung') ||
+            l.description.toLowerCase().includes('lg') ||
+            l.description.toLowerCase().includes('whirlpool') ||
+            l.description.toLowerCase().includes('ge')
+          )
+        );
+        
+        const typeLabels = sortedLabels.filter(l => 
+          l.description && (
+            l.description.toLowerCase().includes('microwave') ||
+            l.description.toLowerCase().includes('oven') ||
+            l.description.toLowerCase().includes('refrigerator') ||
+            l.description.toLowerCase().includes('washer')
+          )
+        );
+
+        if (brandLabels.length > 0 && typeLabels.length > 0) {
+          productInfo.name = `${brandLabels[0].description} ${typeLabels[0].description}`;
+          console.log('✅ Improved product name from labels:', productInfo.name);
+        } else if (typeLabels.length > 0) {
+          productInfo.name = typeLabels[0].description;
+          console.log('✅ Improved product name from type label:', productInfo.name);
+        }
+      }
+
+      // Si no tenemos nombre, usar el mejor label
+      if (!productInfo.name && sortedLabels.length > 0 && sortedLabels[0].score > 0.8) {
         productInfo.name = sortedLabels[0].description;
         console.log('✅ Product name from labels (fallback):', productInfo.name);
       }
 
-      // Add other labels
-      sortedLabels.slice(1, 6).forEach(label => {
-        if (label.description && label.score > 0.7) {
+      // Agregar otros labels
+      sortedLabels.slice(0, 10).forEach(label => {
+        if (label.description && label.score > 0.6 && !productInfo.labels.includes(label.description)) {
           productInfo.labels.push(label.description);
         }
       });
@@ -1105,6 +1210,10 @@ const extractProductInfoFromUrls = async (urls, productName) => {
     url: null
   };
 
+  if (!urls || urls.length === 0) {
+    return result;
+  }
+
   // Prioritize product pages from major retailers
   const productUrls = urls.filter(url => 
     url.includes('amazon.') || 
@@ -1112,6 +1221,8 @@ const extractProductInfoFromUrls = async (urls, productName) => {
     url.includes('walmart.') ||
     url.includes('target.') ||
     url.includes('bestbuy.') ||
+    url.includes('mercadolibre.') ||
+    url.includes('chedraui.') ||
     url.includes('/product/') ||
     url.includes('/p/') ||
     url.includes('/item/') ||
@@ -1133,10 +1244,106 @@ const extractProductInfoFromUrls = async (urls, productName) => {
       result.platform = 'Target';
     } else if (productUrls[0].includes('bestbuy.')) {
       result.platform = 'Best Buy';
+    } else if (productUrls[0].includes('mercadolibre.')) {
+      result.platform = 'MercadoLibre';
+    } else if (productUrls[0].includes('chedraui.')) {
+      result.platform = 'Chedraui';
     }
   } else if (urls.length > 0) {
     // Use first URL if no product pages found
     result.url = urls[0];
+  }
+
+  // Si tenemos un nombre de producto, buscar precios usando Google Custom Search
+  if (productName && productName !== 'Small appliance' && productName !== 'Product from Photo') {
+    try {
+      console.log('🔍 Searching for prices using product name:', productName);
+      const googleApiKey = process.env.GOOGLE_API_KEY;
+      const googleCx = process.env.GOOGLE_CX;
+
+      if (googleApiKey && googleCx && googleApiKey !== 'your-api-key-here' && googleCx !== 'your-search-engine-id-here') {
+        // Helper function to extract prices from text
+        const extractPrices = (text) => {
+          const prices = [];
+          if (!text) return prices;
+          
+          const dollarPattern = /\$[\d,]+\.?\d*/g;
+          const mxnPattern = /MXN\s*\$?[\d,]+\.?\d*/gi;
+          const pesoPattern = /[\d,]+\.?\d*\s*pesos?/gi;
+          
+          const allPatterns = [
+            ...text.match(dollarPattern) || [],
+            ...text.match(mxnPattern) || [],
+            ...text.match(pesoPattern) || []
+          ];
+          
+          for (const match of allPatterns) {
+            const priceValue = match.replace(/[^0-9.]/g, '').replace(/,/g, '');
+            const priceNum = parseFloat(priceValue);
+            
+            if (!isNaN(priceNum) && priceNum > 0 && priceNum < 1000000) {
+              const formattedPrice = `$${priceNum.toFixed(2)}`;
+              
+              const existingPrice = prices.find(p => 
+                Math.abs(parseFloat(p.replace('$', '').replace(/,/g, '')) - priceNum) < 0.01
+              );
+              
+              if (!existingPrice) {
+                prices.push(formattedPrice);
+              }
+            }
+          }
+          
+          return prices;
+        };
+
+        // Buscar en Google Shopping
+        const googleShoppingResponse = await axios.get('https://www.googleapis.com/customsearch/v1', {
+          params: {
+            key: googleApiKey,
+            cx: googleCx,
+            q: `${productName} precio price comprar buy`,
+            num: 5,
+            safe: 'active'
+          },
+          timeout: 10000
+        });
+
+        if (googleShoppingResponse.data && googleShoppingResponse.data.items && googleShoppingResponse.data.items.length > 0) {
+          googleShoppingResponse.data.items.forEach(item => {
+            // Extraer precios del snippet y título
+            const searchText = `${item.title || ''} ${item.snippet || ''}`;
+            const foundPrices = extractPrices(searchText);
+            
+            foundPrices.forEach(price => {
+              const existingPrice = result.prices.find(p => {
+                const p1 = parseFloat(p.price.replace('$', '').replace(/,/g, ''));
+                const p2 = parseFloat(price.replace('$', '').replace(/,/g, ''));
+                return Math.abs(p1 - p2) < 0.01;
+              });
+              
+              if (!existingPrice) {
+                const sellerName = item.displayLink || 'Google';
+                result.prices.push({
+                  source: sellerName,
+                  price: price,
+                  url: item.link || result.url
+                });
+                console.log(`✅ Found price from ${sellerName}: ${price}`);
+              }
+            });
+
+            // Obtener imagen si está disponible
+            if (!result.image && item.pagemap && item.pagemap.cse_image && item.pagemap.cse_image[0]) {
+              result.image = item.pagemap.cse_image[0].src;
+              console.log('✅ Found image from Google search');
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.log(`❌ Error extracting info from URLs:`, error.message);
+    }
   }
 
   return result;
@@ -1211,20 +1418,39 @@ router.post('/scan-image', async (req, res) => {
       // Step 2: Extract product info from URLs found
       const urlBasedInfo = await extractProductInfoFromUrls(visualSearchResult.urls, visualSearchResult.name);
       
-      // Step 3: Search for product using the name found from visual search
-      let productInfo = null;
-      if (visualSearchResult.name) {
-        productInfo = await lookupProductByName(visualSearchResult.name);
+      // Step 3: Construir mejor nombre del producto combinando labels si el nombre es genérico
+      let searchName = visualSearchResult.name;
+      if (visualSearchResult.name && (
+        visualSearchResult.name.toLowerCase().includes('appliance') ||
+        visualSearchResult.name.toLowerCase().includes('product') ||
+        visualSearchResult.name.toLowerCase().includes('item')
+      ) && visualSearchResult.labels && visualSearchResult.labels.length > 0) {
+        // Combinar labels para crear nombre más específico
+        const relevantLabels = visualSearchResult.labels
+          .filter(l => l.length > 3)
+          .slice(0, 3)
+          .join(' ');
+        
+        if (relevantLabels) {
+          searchName = relevantLabels;
+          console.log('✅ Using combined labels as search name:', searchName);
+        }
       }
       
-      // Step 4: Combine results (prioritize visual search name, then URL info, then text search)
+      // Step 4: Search for product using the improved name
+      let productInfo = null;
+      if (searchName && searchName !== 'Small appliance' && searchName !== 'Product from Photo') {
+        productInfo = await lookupProductByName(searchName);
+      }
+      
+      // Step 5: Combine results (prioritize visual search name, then URL info, then text search)
       const name = visualSearchResult.name || urlBasedInfo.name || (productInfo?.name) || 'Product from Photo';
       const prices = productInfo?.prices || urlBasedInfo.prices || [];
       const finalImageUrl = productInfo?.image || urlBasedInfo.image || (image_base64 ? `data:image/jpeg;base64,${image_base64}` : null);
       const platform = productInfo?.platform || urlBasedInfo.platform || null;
       const productUrl = productInfo?.url || urlBasedInfo.url || visualSearchResult.urls[0] || null;
 
-      // Step 5: Save to database
+      // Step 6: Save to database
       const finalImageUrlForDB = (productInfo?.image && !productInfo.image.startsWith('data:')) ? productInfo.image : null;
       
       const platformSuggestions = JSON.stringify([]);
