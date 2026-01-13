@@ -425,16 +425,22 @@ const lookupBarcode = async (barcode) => {
 // Generate JWT token for Google Service Account authentication
 const generateJWT = () => {
   const crypto = require('crypto');
-  const privateKey = process.env.GOOGLE_VISION_PRIVATE_KEY;
+  let privateKey = process.env.GOOGLE_VISION_PRIVATE_KEY;
   const clientEmail = process.env.GOOGLE_VISION_CLIENT_EMAIL;
 
   console.log('🔧 Generating JWT with:');
   console.log('📧 Client email:', clientEmail);
-  console.log('🔑 Private key length:', privateKey ? privateKey.length : 'null');
+  console.log('🔑 Raw private key length:', privateKey ? privateKey.length : 'null');
 
   if (!privateKey || !clientEmail) {
     throw new Error('GOOGLE_VISION_PRIVATE_KEY and GOOGLE_VISION_CLIENT_EMAIL are required');
   }
+
+  // Process the private key - replace \n with actual newlines
+  privateKey = privateKey.replace(/\\n/g, '\n');
+  console.log('🔑 Processed private key length:', privateKey.length);
+  console.log('🔑 Private key starts with:', privateKey.substring(0, 30));
+  console.log('🔑 Private key ends with:', privateKey.substring(privateKey.length - 30));
 
   const now = Math.floor(Date.now() / 1000);
   const payload = {
