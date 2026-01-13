@@ -188,73 +188,36 @@ export default function HomeScreen() {
     try {
       console.log('📸 handlePhoto called');
       
-      // Request camera/media library permissions
+      // Request camera permission only
       const { status: cameraStatus } = await ImagePicker.requestCameraPermissionsAsync();
-      const { status: mediaStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       
-      if (cameraStatus !== 'granted' && mediaStatus !== 'granted') {
+      if (cameraStatus !== 'granted') {
         Alert.alert(
           'Permission Required',
-          'Camera and media library permissions are required to take or select photos.'
+          'Camera permission is required to take photos.'
         );
         return;
       }
 
-      // Show action sheet to choose between camera or gallery
-      Alert.alert(
-        'Select Photo',
-        'Choose an option',
-        [
-          {
-            text: 'Camera',
-            onPress: async () => {
-              try {
-                const result = await ImagePicker.launchCameraAsync({
-                  mediaTypes: ['images'],
-                  allowsEditing: true,
-                  quality: 0.8,
-                  base64: true,
-                });
+      // Open camera directly
+      try {
+        const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          quality: 0.5, // Reduced quality to reduce file size
+          base64: true,
+        });
 
-                if (!result.canceled && result.assets && result.assets[0]) {
-                  await processPhotoImage(result.assets[0]);
-                }
-              } catch (error) {
-                console.error('Camera error:', error);
-                Alert.alert('Error', 'Failed to take photo. Please try again.');
-              }
-            },
-          },
-          {
-            text: 'Gallery',
-            onPress: async () => {
-              try {
-                const result = await ImagePicker.launchImageLibraryAsync({
-                  mediaTypes: ['images'],
-                  allowsEditing: true,
-                  quality: 0.8,
-                  base64: true,
-                  legacy: true, // For Android 13/14 compatibility
-                });
-
-                if (!result.canceled && result.assets && result.assets[0]) {
-                  await processPhotoImage(result.assets[0]);
-                }
-              } catch (error) {
-                console.error('Gallery error:', error);
-                Alert.alert('Error', 'Failed to select photo. Please try again.');
-              }
-            },
-          },
-          {
-            text: 'Cancel',
-            style: 'cancel',
-          },
-        ]
-      );
+        if (!result.canceled && result.assets && result.assets[0]) {
+          await processPhotoImage(result.assets[0]);
+        }
+      } catch (error) {
+        console.error('Camera error:', error);
+        Alert.alert('Error', 'Failed to take photo. Please try again.');
+      }
     } catch (error) {
       console.error('Photo picker error:', error);
-      Alert.alert('Error', 'Failed to open photo picker. Please try again.');
+      Alert.alert('Error', 'Failed to open camera. Please try again.');
     }
   };
 
@@ -859,7 +822,7 @@ export default function HomeScreen() {
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.scanButtonText}>SCAN</Text>
+              <Text style={styles.scanButtonText} numberOfLines={1} adjustsFontSizeToFit={true} minimumFontScale={0.7}>SCAN</Text>
             )}
           </TouchableOpacity>
           
@@ -871,7 +834,7 @@ export default function HomeScreen() {
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.scanButtonText}>PHOTO</Text>
+              <Text style={styles.scanButtonText} numberOfLines={1} adjustsFontSizeToFit={true} minimumFontScale={0.7}>PHOTO</Text>
             )}
           </TouchableOpacity>
           
@@ -1166,10 +1129,12 @@ const styles = StyleSheet.create({
   },
   scanButton: {
     backgroundColor: '#1a1a1a',
-    paddingVertical: 18,
-    paddingHorizontal: 40,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 56,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
@@ -1184,16 +1149,19 @@ const styles = StyleSheet.create({
   },
   scanButtonText: {
     color: '#fff',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
-    letterSpacing: 1.5,
+    letterSpacing: 1,
+    textAlign: 'center',
   },
   photoButton: {
     backgroundColor: '#4CAF50',
-    paddingVertical: 18,
-    paddingHorizontal: 40,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 56,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
