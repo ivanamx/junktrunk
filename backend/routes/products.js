@@ -422,18 +422,87 @@ const lookupBarcode = async (barcode) => {
   }
 };
 
+// Generate JWT token for Google Service Account authentication
+const generateJWT = () => {
+  const crypto = require('crypto');
+  const privateKey = process.env.GOOGLE_VISION_PRIVATE_KEY;
+  const clientEmail = process.env.GOOGLE_VISION_CLIENT_EMAIL;
+
+  if (!privateKey || !clientEmail) {
+    throw new Error('GOOGLE_VISION_PRIVATE_KEY and GOOGLE_VISION_CLIENT_EMAIL are required');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: clientEmail,
+    scope: 'https://www.googleapis.com/auth/cloud-vision',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600, // 1 hour
+    iat: now
+  };
+
+  const header = {
+    alg: 'RS256',
+    typ: 'JWT'
+  };
+
+  const encodeBase64 = (obj) => {
+    return Buffer.from(JSON.stringify(obj)).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  };
+
+  const jwtHeader = encodeBase64(header);
+  const jwtPayload = encodeBase64(payload);
+
+  const message = `${jwtHeader}.${jwtPayload}`;
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(message);
+
+  // Remove header/footer from private key and format properly
+  const privateKeyFormatted = privateKey.replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '').replace(/\n/g, '');
+  const privateKeyBuffer = Buffer.from(privateKeyFormatted, 'base64');
+
+  const signature = signer.sign(privateKeyBuffer, 'base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+
+  return `${message}.${signature}`;
+};
+
+// Get access token using JWT
+const getAccessToken = async () => {
+  try {
+    const jwt = generateJWT();
+
+    const response = await axios.post('https://oauth2.googleapis.com/token', {
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: jwt
+    });
+
+    return response.data.access_token;
+  } catch (error) {
+    console.error('Error getting access token:', error.response?.data || error.message);
+    return null;
+  }
+};
+
 // Search products by image using Google Vision API (WEB_DETECTION for visual search)
 const searchProductByImage = async (imageBase64) => {
   try {
     const visionApiKey = process.env.GOOGLE_VISION_API_KEY;
-    
-    if (!visionApiKey || visionApiKey === 'your-google-vision-api-key-here') {
+
+    // Try service account authentication first, fallback to API key
+    let accessToken = null;
+    let visionApiUrl;
+
+    if (process.env.GOOGLE_VISION_PRIVATE_KEY && process.env.GOOGLE_VISION_CLIENT_EMAIL) {
+      // Use service account authentication
+      accessToken = await getAccessToken();
+      visionApiUrl = 'https://vision.googleapis.com/v1/images:annotate';
+    } else if (visionApiKey && visionApiKey !== 'your-google-vision-api-key-here') {
+      // Fallback to API key
+      visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
+    } else {
       return null;
     }
 
-    // Use Google Vision API with WEB_DETECTION to find similar products/images on the web
-    const visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
-    
     const requestBody = {
       requests: [
         {
@@ -446,10 +515,6 @@ const searchProductByImage = async (imageBase64) => {
               maxResults: 10
             },
             {
-              type: 'TEXT_DETECTION',
-              maxResults: 10
-            },
-            {
               type: 'LABEL_DETECTION',
               maxResults: 10
             }
@@ -458,10 +523,17 @@ const searchProductByImage = async (imageBase64) => {
       ]
     };
 
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+
+    // Add Bearer token if using service account
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+
     const response = await axios.post(visionApiUrl, requestBody, {
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       timeout: 20000
     });
 
@@ -475,8 +547,7 @@ const searchProductByImage = async (imageBase64) => {
     let productInfo = {
       name: null,
       urls: [],
-      labels: [],
-      text: null
+      labels: []
     };
 
     // Get web pages with similar images (these are likely product pages)
@@ -530,32 +601,12 @@ const searchProductByImage = async (imageBase64) => {
       });
     }
 
-    // Get text from image (for additional context)
-    if (visionResponse.textAnnotations && visionResponse.textAnnotations.length > 0) {
-      productInfo.text = visionResponse.textAnnotations[0].description || '';
-    }
 
     // Build product name from best available information
     if (!productInfo.name && productInfo.labels.length > 0) {
       productInfo.name = productInfo.labels[0];
     }
 
-    if (!productInfo.name && productInfo.text) {
-      // Extract product name from text
-      const lines = productInfo.text.split('\n').filter(line => line.trim().length > 0);
-      for (const line of lines.slice(0, 5)) {
-        const trimmedLine = line.trim();
-        if (
-          !/^\$[\d,]+/.test(trimmedLine) &&
-          !/^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(trimmedLine) &&
-          !/^[A-Z0-9]{8,}$/.test(trimmedLine) &&
-          trimmedLine.length >= 3
-        ) {
-          productInfo.name = trimmedLine;
-          break;
-        }
-      }
-    }
 
     return productInfo;
   } catch (error) {
@@ -1150,7 +1201,7 @@ router.post('/scan-image', async (req, res) => {
       
       if (!visualSearchResult || !visualSearchResult.urls || visualSearchResult.urls.length === 0) {
         // Fallback: try text-based search if visual search fails
-        const productName = visualSearchResult?.name || visualSearchResult?.labels?.[0] || visualSearchResult?.text?.split('\n')[0] || null;
+        const productName = visualSearchResult?.name || visualSearchResult?.labels?.[0] || null;
         
         if (productName) {
           const productInfo = await lookupProductByName(productName);
