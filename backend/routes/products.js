@@ -422,18 +422,16 @@ const lookupBarcode = async (barcode) => {
   }
 };
 
-// Extract text from image using Google Vision API (REST)
-const extractTextFromImage = async (imageBase64) => {
+// Search products by image using Google Vision API (WEB_DETECTION for visual search)
+const searchProductByImage = async (imageBase64) => {
   try {
-    console.log('🔍 Extracting text from image using Google Vision API...');
     const visionApiKey = process.env.GOOGLE_VISION_API_KEY;
     
     if (!visionApiKey || visionApiKey === 'your-google-vision-api-key-here') {
-      console.log('⚠️ Google Vision API Key not configured');
       return null;
     }
 
-    // Use Google Vision API REST endpoint
+    // Use Google Vision API with WEB_DETECTION to find similar products/images on the web
     const visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`;
     
     const requestBody = {
@@ -444,7 +442,15 @@ const extractTextFromImage = async (imageBase64) => {
           },
           features: [
             {
+              type: 'WEB_DETECTION',
+              maxResults: 10
+            },
+            {
               type: 'TEXT_DETECTION',
+              maxResults: 10
+            },
+            {
+              type: 'LABEL_DETECTION',
               maxResults: 10
             }
           ]
@@ -456,62 +462,103 @@ const extractTextFromImage = async (imageBase64) => {
       headers: {
         'Content-Type': 'application/json'
       },
-      timeout: 15000
+      timeout: 20000
     });
 
     if (!response.data || !response.data.responses || response.data.responses.length === 0) {
-      console.log('⚠️ No response from Google Vision API');
       return null;
     }
 
     const visionResponse = response.data.responses[0];
     
-    if (!visionResponse.textAnnotations || visionResponse.textAnnotations.length === 0) {
-      console.log('⚠️ No text detected in image');
-      return null;
-    }
+    // Extract product information from web detection results
+    let productInfo = {
+      name: null,
+      urls: [],
+      labels: [],
+      text: null
+    };
 
-    // The first annotation contains all text, subsequent ones are individual words
-    const fullText = visionResponse.textAnnotations[0].description || '';
-    console.log('✅ Text extracted from image:', fullText.substring(0, 200));
-    
-    // Try to extract product name (look for common patterns)
-    // Usually product names are in the first few lines or have specific formatting
-    const lines = fullText.split('\n').filter(line => line.trim().length > 0);
-    
-    // Look for product name patterns:
-    // 1. First substantial line (usually product name)
-    // 2. Lines that don't look like prices, dates, or codes
-    let productName = null;
-    
-    for (const line of lines.slice(0, 10)) { // Check first 10 lines
-      const trimmedLine = line.trim();
-      // Skip if it looks like a price, date, or code
-      if (
-        /^\$[\d,]+/.test(trimmedLine) || // Price
-        /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(trimmedLine) || // Date
-        /^[A-Z0-9]{8,}$/.test(trimmedLine) || // Code/UPC
-        trimmedLine.length < 3 // Too short
-      ) {
-        continue;
+    // Get web pages with similar images (these are likely product pages)
+    if (visionResponse.webDetection) {
+      // Pages with matching images (most relevant)
+      if (visionResponse.webDetection.pagesWithMatchingImages) {
+        visionResponse.webDetection.pagesWithMatchingImages.forEach(page => {
+          if (page.url) {
+            productInfo.urls.push(page.url);
+          }
+        });
       }
       
-      // Found a likely product name
-      productName = trimmedLine;
-      break;
+      // Full matching images (product listings)
+      if (visionResponse.webDetection.fullMatchingImages) {
+        visionResponse.webDetection.fullMatchingImages.forEach(image => {
+          if (image.url) {
+            productInfo.urls.push(image.url);
+          }
+        });
+      }
+      
+      // Partial matching images
+      if (visionResponse.webDetection.partialMatchingImages) {
+        visionResponse.webDetection.partialMatchingImages.forEach(image => {
+          if (image.url) {
+            productInfo.urls.push(image.url);
+          }
+        });
+      }
+      
+      // Web entities (detected products/objects)
+      if (visionResponse.webDetection.webEntities) {
+        visionResponse.webDetection.webEntities.forEach(entity => {
+          if (entity.description && entity.description.length > 3) {
+            // Use the most relevant entity as product name
+            if (!productInfo.name && entity.score > 0.5) {
+              productInfo.name = entity.description;
+            }
+          }
+        });
+      }
     }
-    
-    // If no specific product name found, use first substantial text block
-    if (!productName && fullText.trim().length > 0) {
-      productName = fullText.split('\n')[0].trim();
+
+    // Get labels (object/product type detection)
+    if (visionResponse.labelAnnotations) {
+      visionResponse.labelAnnotations.forEach(label => {
+        if (label.description && label.score > 0.7) {
+          productInfo.labels.push(label.description);
+        }
+      });
     }
-    
-    return productName || fullText.trim().substring(0, 100); // Return first 100 chars if no name found
+
+    // Get text from image (for additional context)
+    if (visionResponse.textAnnotations && visionResponse.textAnnotations.length > 0) {
+      productInfo.text = visionResponse.textAnnotations[0].description || '';
+    }
+
+    // Build product name from best available information
+    if (!productInfo.name && productInfo.labels.length > 0) {
+      productInfo.name = productInfo.labels[0];
+    }
+
+    if (!productInfo.name && productInfo.text) {
+      // Extract product name from text
+      const lines = productInfo.text.split('\n').filter(line => line.trim().length > 0);
+      for (const line of lines.slice(0, 5)) {
+        const trimmedLine = line.trim();
+        if (
+          !/^\$[\d,]+/.test(trimmedLine) &&
+          !/^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(trimmedLine) &&
+          !/^[A-Z0-9]{8,}$/.test(trimmedLine) &&
+          trimmedLine.length >= 3
+        ) {
+          productInfo.name = trimmedLine;
+          break;
+        }
+      }
+    }
+
+    return productInfo;
   } catch (error) {
-    console.error('❌ Error extracting text from image:', error.message);
-    if (error.response) {
-      console.error('❌ Vision API error response:', error.response.data);
-    }
     return null;
   }
 };
@@ -1041,65 +1088,134 @@ router.post('/scan', async (req, res) => {
   }
 });
 
+// Extract product info from URLs found by visual search
+const extractProductInfoFromUrls = async (urls, productName) => {
+  let result = {
+    name: productName,
+    image: null,
+    prices: [],
+    platform: null,
+    url: null
+  };
+
+  // Prioritize product pages from major retailers
+  const productUrls = urls.filter(url => 
+    url.includes('amazon.') || 
+    url.includes('ebay.com') || 
+    url.includes('walmart.') ||
+    url.includes('target.') ||
+    url.includes('bestbuy.') ||
+    url.includes('/product/') ||
+    url.includes('/p/') ||
+    url.includes('/item/') ||
+    url.includes('/dp/')
+  );
+
+  // Use first product URL found
+  if (productUrls.length > 0) {
+    result.url = productUrls[0];
+    
+    // Detect platform
+    if (productUrls[0].includes('amazon.')) {
+      result.platform = 'Amazon';
+    } else if (productUrls[0].includes('ebay.com')) {
+      result.platform = 'eBay';
+    } else if (productUrls[0].includes('walmart.')) {
+      result.platform = 'Walmart';
+    } else if (productUrls[0].includes('target.')) {
+      result.platform = 'Target';
+    } else if (productUrls[0].includes('bestbuy.')) {
+      result.platform = 'Best Buy';
+    }
+  } else if (urls.length > 0) {
+    // Use first URL if no product pages found
+    result.url = urls[0];
+  }
+
+  return result;
+};
+
 // Scan product by image endpoint
 router.post('/scan-image', async (req, res) => {
   try {
-    console.log('📥 Received scan-image request');
     const { image_base64, image_uri, latitude, longitude, user_id } = req.body;
 
     if (!image_base64) {
-      console.error('❌ Image base64 is required');
       return res.status(400).json({ error: 'Image base64 is required' });
     }
-    
-    console.log('🔍 Processing image...');
 
     try {
-      // Step 1: Extract text/product name from image using Google Vision API
-      const productName = await extractTextFromImage(image_base64);
+      // Step 1: Search products by image using Google Vision WEB_DETECTION
+      const visualSearchResult = await searchProductByImage(image_base64);
       
-      if (!productName || productName.trim().length === 0) {
-        console.log('⚠️ Could not extract product name from image');
+      if (!visualSearchResult || !visualSearchResult.urls || visualSearchResult.urls.length === 0) {
+        // Fallback: try text-based search if visual search fails
+        const productName = visualSearchResult?.name || visualSearchResult?.labels?.[0] || visualSearchResult?.text?.split('\n')[0] || null;
+        
+        if (productName) {
+          const productInfo = await lookupProductByName(productName);
+          if (productInfo && productInfo.name) {
+            // Use text-based search results
+            const name = productInfo.name;
+            const prices = productInfo.prices || [];
+            const finalImageUrl = productInfo.image || (image_base64 ? `data:image/jpeg;base64,${image_base64}` : null);
+            
+            const insertResult = await pool.query(
+              `INSERT INTO products (name, image_url, platform_suggestions, prices)
+               VALUES ($1, $2, $3, $4)
+               RETURNING *`,
+              [name, finalImageUrl, JSON.stringify([]), JSON.stringify(prices)]
+            );
+
+            await pool.query(
+              'INSERT INTO scan_history (product_id, latitude, longitude, user_id) VALUES ($1, $2, $3, $4)',
+              [insertResult.rows[0].id, latitude || null, longitude || null, user_id || null]
+            );
+
+            return res.json({
+              success: true,
+              product: {
+                id: insertResult.rows[0].id,
+                name: name,
+                barcode: null,
+                image: finalImageUrl,
+                price: prices.length > 0 ? prices[0].price : null,
+                description: null,
+                prices: prices,
+                lastScannedAt: new Date().toISOString(),
+                lastScannedLatitude: latitude || null,
+                lastScannedLongitude: longitude || null
+              }
+            });
+          }
+        }
+        
         return res.json({
           success: false,
           error: 'PRODUCT_NOT_FOUND',
-          message: 'Could not identify product from image',
+          message: 'Could not identify product from image'
         });
       }
-      
-      console.log('✅ Extracted product name from image:', productName);
 
-      // Step 2: Search for product by name
-      const productInfo = await lookupProductByName(productName);
+      // Step 2: Extract product info from URLs found
+      const urlBasedInfo = await extractProductInfoFromUrls(visualSearchResult.urls, visualSearchResult.name);
       
-      if (!productInfo || productInfo === null) {
-        console.log('❌ Product not found in any API');
-        return res.json({
-          success: false,
-          error: 'PRODUCT_NOT_FOUND',
-          message: 'Product not found in any API',
-          productName: productName
-        });
+      // Step 3: Search for product using the name found from visual search
+      let productInfo = null;
+      if (visualSearchResult.name) {
+        productInfo = await lookupProductByName(visualSearchResult.name);
       }
       
-      console.log('📦 Product info from lookup:', productInfo);
+      // Step 4: Combine results (prioritize visual search name, then URL info, then text search)
+      const name = visualSearchResult.name || urlBasedInfo.name || (productInfo?.name) || 'Product from Photo';
+      const prices = productInfo?.prices || urlBasedInfo.prices || [];
+      const finalImageUrl = productInfo?.image || urlBasedInfo.image || (image_base64 ? `data:image/jpeg;base64,${image_base64}` : null);
+      const platform = productInfo?.platform || urlBasedInfo.platform || null;
+      const productUrl = productInfo?.url || urlBasedInfo.url || visualSearchResult.urls[0] || null;
 
-      // Step 3: Use the image from the photo if no image found in APIs
-      const finalImageUrl = productInfo.image || image_uri || null;
-      const prices = productInfo.prices || [];
-
-      console.log('💰 Prices from lookup:', prices.length, 'prices found');
-      console.log('🖼️ Image URL:', finalImageUrl);
-
-      // Step 4: Save to database (similar to scan endpoint)
-      // Since we don't have a barcode, we'll use the product name as identifier
-      // Or we can create a product without barcode
-      const name = productInfo.name || productName;
-      const finalImageUrlForDB = (finalImageUrl && typeof finalImageUrl === 'string' && finalImageUrl.trim() !== '') ? finalImageUrl.trim() : null;
+      // Step 5: Save to database
+      const finalImageUrlForDB = (productInfo?.image && !productInfo.image.startsWith('data:')) ? productInfo.image : null;
       
-      // Check if product already exists (by name, approximate match)
-      // For now, we'll create a new entry each time since we don't have barcode
-      // Use same columns as /scan endpoint to avoid database errors
       const platformSuggestions = JSON.stringify([]);
 
       const insertResult = await pool.query(
@@ -1115,20 +1231,12 @@ router.post('/scan-image', async (req, res) => {
       );
 
       const newProduct = insertResult.rows[0];
-      console.log('✅ Product saved to database:', newProduct.id);
 
-      // Add to scan history
-      try {
-        await pool.query(
-          'INSERT INTO scan_history (product_id, latitude, longitude, user_id) VALUES ($1, $2, $3, $4)',
-          [newProduct.id, latitude || null, longitude || null, user_id || null]
-        );
-        console.log('📍 Location and user saved to scan history');
-      } catch (err) {
-        console.error('⚠️ Error adding to scan history:', err);
-      }
+      await pool.query(
+        'INSERT INTO scan_history (product_id, latitude, longitude, user_id) VALUES ($1, $2, $3, $4)',
+        [newProduct.id, latitude || null, longitude || null, user_id || null]
+      );
 
-      // Format response (same structure as scan endpoint)
       const formattedPrices = prices.map(p => ({
         source: p.source,
         price: p.price,
@@ -1140,14 +1248,14 @@ router.post('/scan-image', async (req, res) => {
         product: {
           id: newProduct.id,
           name: name,
-          barcode: null, // No barcode for image-based scans
-          image: finalImageUrlForDB,
+          barcode: null,
+          image: finalImageUrl,
           price: formattedPrices.length > 0 ? formattedPrices[0].price : null,
           description: null,
-          brand: productInfo.brand || null,
-          category: productInfo.category || null,
-          platform: productInfo.platform || null,
-          url: productInfo.url || null,
+          brand: productInfo?.brand || null,
+          category: productInfo?.category || null,
+          platform: platform,
+          url: productUrl,
           prices: formattedPrices,
           lastScannedAt: new Date().toISOString(),
           lastScannedLatitude: latitude || null,
