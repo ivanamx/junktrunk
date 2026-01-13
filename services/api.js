@@ -23,7 +23,7 @@ import { Platform } from 'react-native';
 // 3. Copia la URL HTTPS que aparece (ej: https://abc123.loca.lt)
 // 4. Pega esa URL aquí abajo:
 
-const LOCALTUNNEL_URL = 'https://junktrunk.cargolux.lat';
+const LOCALTUNNEL_URL = 'https://junktrunk.ironslash.com';
 
 // Auto-detect: Prioridad localtunnel > local IP
 const getApiBaseUrl = () => {
