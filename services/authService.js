@@ -5,7 +5,7 @@ const USER_KEY = '@JunkTrunk:user';
 
 // Helper to get base URL (should match api.js)
 const getBaseUrl = () => {
-  const LOCALTUNNEL_URL = 'https://junktrunk.cargolux.lat';
+  const LOCALTUNNEL_URL = 'https://junktrunk.ironslash.com';
   if (LOCALTUNNEL_URL && LOCALTUNNEL_URL !== null && LOCALTUNNEL_URL !== '') {
     return `${LOCALTUNNEL_URL}/api`;
   }
