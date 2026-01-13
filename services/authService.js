@@ -75,7 +75,11 @@ class AuthService {
 
   async register(username, email, password, name) {
     try {
-      const response = await fetch(`${getBaseUrl()}/auth/register`, {
+      const url = `${getBaseUrl()}/auth/register`;
+      console.log('🌐 REGISTER - URL:', url);
+      console.log('🌐 REGISTER - Data:', { username, email, name });
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -87,6 +91,8 @@ class AuthService {
           name,
         }),
       });
+      
+      console.log('🌐 REGISTER - Response status:', response.status);
 
       // Get response text first to debug
       const text = await response.text();
@@ -132,7 +138,9 @@ class AuthService {
 
       return data;
     } catch (error) {
-      console.error('Registration error:', error);
+      console.error('❌ REGISTER ERROR:', error);
+      console.error('❌ REGISTER ERROR message:', error.message);
+      console.error('❌ REGISTER ERROR stack:', error.stack);
       throw error;
     }
   }
