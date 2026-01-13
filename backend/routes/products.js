@@ -432,28 +432,25 @@ const searchProductByImage = async (imageBase64) => {
     console.log('🔍 Starting Clarifai API call...');
 
     // Check Clarifai configuration
-    const apiKey = process.env.CLARIFAI_API_KEY;
+    const pat = process.env.CLARIFAI_PAT;
     const userId = process.env.CLARIFAI_USER_ID;
     const appId = process.env.CLARIFAI_APP_ID;
 
     console.log('🔧 Clarifai config check:');
-    console.log('   - API_KEY exists:', !!apiKey);
+    console.log('   - PAT exists:', !!pat);
     console.log('   - USER_ID exists:', !!userId);
     console.log('   - APP_ID exists:', !!appId);
 
-    if (!apiKey || !userId || !appId ||
-        apiKey === 'your-clarifai-api-key-here' ||
-        userId === 'your-clarifai-user-id-here' ||
-        appId === 'your-clarifai-app-id-here') {
+    if (!pat || !userId || !appId) {
       console.log('❌ Clarifai not configured properly');
       return null;
     }
 
     // Initialize Clarifai
-    const { ClarifaiStub, grpc } = require('clarifai');
+    const { ClarifaiStub, grpc } = require('clarifai-nodejs-grpc');
     const stub = ClarifaiStub.grpc();
     const metadata = new grpc.Metadata();
-    metadata.set('authorization', `Key ${apiKey}`);
+    metadata.set('authorization', `Key ${pat}`);
 
     // Use General model for product recognition
     const request = {
