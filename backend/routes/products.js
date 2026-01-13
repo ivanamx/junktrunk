@@ -451,11 +451,19 @@ const searchProductByImage = async (imageBase64) => {
           },
           features: [
             {
+              type: 'PRODUCT_SEARCH',
+              maxResults: 10
+            },
+            {
               type: 'WEB_DETECTION',
               maxResults: 10
             },
             {
               type: 'LABEL_DETECTION',
+              maxResults: 10
+            },
+            {
+              type: 'TEXT_DETECTION',
               maxResults: 10
             }
           ]
@@ -493,6 +501,31 @@ const searchProductByImage = async (imageBase64) => {
       urls: [],
       labels: []
     };
+
+    // Process PRODUCT_SEARCH results (best for product recognition)
+    if (visionResponse.productSearchResults) {
+      console.log('🛍️ Product search results found');
+
+      if (visionResponse.productSearchResults.results) {
+        visionResponse.productSearchResults.results.forEach(result => {
+          if (result.product && result.product.displayName) {
+            if (!productInfo.name) {
+              productInfo.name = result.product.displayName;
+              console.log('✅ Product name from PRODUCT_SEARCH:', productInfo.name);
+            }
+          }
+
+          if (result.product && result.product.productCategory) {
+            productInfo.labels.push(result.product.productCategory);
+          }
+
+          // Add URLs from product search
+          if (result.image) {
+            productInfo.urls.push(result.image.uri);
+          }
+        });
+      }
+    }
 
     // Get web pages with similar images (these are likely product pages)
     if (visionResponse.webDetection) {
@@ -543,6 +576,28 @@ const searchProductByImage = async (imageBase64) => {
           productInfo.labels.push(label.description);
         }
       });
+    }
+
+    // Get text from image (for model numbers, specs, etc.)
+    if (visionResponse.textAnnotations && visionResponse.textAnnotations.length > 0) {
+      console.log('📝 Found text in image');
+      const text = visionResponse.textAnnotations[0].description || '';
+
+      // Look for product identifiers in text (model numbers, specs, etc.)
+      const lines = text.split('\n').filter(line => line.trim().length > 0);
+      for (const line of lines.slice(0, 5)) {
+        const trimmedLine = line.trim();
+        // Look for meaningful text (not just numbers, not too short/long)
+        if (trimmedLine.length > 3 && trimmedLine.length < 100 &&
+            !/^\d{1,3}(\.\d{1,2})?$/.test(trimmedLine) && // Not just prices
+            !trimmedLine.includes('http')) { // Not URLs
+          if (!productInfo.name) {
+            productInfo.name = trimmedLine;
+            console.log('✅ Product name from text:', productInfo.name);
+            break;
+          }
+        }
+      }
     }
 
 
