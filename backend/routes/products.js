@@ -424,116 +424,148 @@ const lookupBarcode = async (barcode) => {
 
 // Removed complex JWT/OAuth functions - now using simple API key
 
-// Search products by image using Google Vision API (WEB_DETECTION for visual search)
-// Search products by image using Clarifai API (better than Google Vision)
+// Search products by image using Google Cloud Vision API (WEB_DETECTION - similar to Google Lens)
 const searchProductByImage = async (imageBase64) => {
   try {
-    console.log('🤖 CLARIFAI FUNCTION CALLED');
-    console.log('🔍 Starting Clarifai API call...');
+    console.log('🔍 Starting Google Cloud Vision API call (WEB_DETECTION)...');
 
-    // Check Clarifai configuration
-    const pat = process.env.CLARIFAI_PAT;
-    const userId = process.env.CLARIFAI_USER_ID;
-    const appId = process.env.CLARIFAI_APP_ID;
+    const googleVisionApiKey = process.env.GOOGLE_VISION_API_KEY || process.env.GOOGLE_API_KEY;
 
-    console.log('🔧 Clarifai config check:');
-    console.log('   - PAT exists:', !!pat);
-    console.log('   - USER_ID exists:', !!userId);
-    console.log('   - APP_ID exists:', !!appId);
-
-    if (!pat || !userId || !appId) {
-      console.log('❌ Clarifai not configured properly');
+    if (!googleVisionApiKey || googleVisionApiKey === 'your-api-key-here') {
+      console.log('❌ Google Vision API key not configured');
       return null;
     }
 
-    // Initialize Clarifai
-    const { ClarifaiStub, grpc } = require('clarifai-nodejs-grpc');
-    const stub = ClarifaiStub.grpc();
-    const metadata = new grpc.Metadata();
-    metadata.set('authorization', `Key ${pat}`);
+    // Use Google Cloud Vision API REST endpoint
+    const visionUrl = `https://vision.googleapis.com/v1/images:annotate?key=${googleVisionApiKey}`;
 
-    // Use General model for product recognition
-    const request = {
-      user_app_id: {
-        user_id: userId,
-        app_id: appId
-      },
-      inputs: [
+    const requestBody = {
+      requests: [
         {
-          data: {
-            image: {
-              base64: imageBase64
+          image: {
+            content: imageBase64
+          },
+          features: [
+            {
+              type: 'WEB_DETECTION',
+              maxResults: 10
+            },
+            {
+              type: 'LABEL_DETECTION',
+              maxResults: 10
             }
-          }
+          ]
         }
-      ],
-      model_id: 'general-image-recognition' // General model for broad recognition
+      ]
     };
 
-    console.log('🌐 Calling Clarifai API...');
+    console.log('🌐 Calling Google Cloud Vision API...');
 
-    return new Promise((resolve, reject) => {
-      stub.PostModelOutputs(request, metadata, (err, response) => {
-        if (err) {
-          console.error('❌ Clarifai API error:', err.message);
-          resolve(null);
-          return;
-        }
-
-        console.log('✅ Clarifai API response received');
-
-        if (!response.outputs || response.outputs.length === 0) {
-          console.log('❌ No outputs from Clarifai');
-          resolve(null);
-          return;
-        }
-
-        const output = response.outputs[0];
-        let productInfo = {
-          name: null,
-          urls: [],
-          labels: []
-        };
-
-        // Process concepts (tags/labels from Clarifai)
-        if (output.data && output.data.concepts) {
-          console.log('🏷️ Found concepts:', output.data.concepts.length);
-
-          // Sort by confidence and get top results
-          const sortedConcepts = output.data.concepts
-            .sort((a, b) => (b.value || 0) - (a.value || 0))
-            .slice(0, 10);
-
-          sortedConcepts.forEach(concept => {
-            if (concept.name && concept.value > 0.8) { // High confidence threshold
-              productInfo.labels.push(concept.name);
-
-              // Use the highest confidence concept as product name if it's meaningful
-              if (!productInfo.name && concept.name.length > 3 && concept.value > 0.95) {
-                productInfo.name = concept.name;
-                console.log('✅ Product name from Clarifai:', productInfo.name);
-              }
-            }
-          });
-
-          // If no high-confidence name found, use the top concept
-          if (!productInfo.name && sortedConcepts.length > 0) {
-            productInfo.name = sortedConcepts[0].name;
-            console.log('✅ Using top concept as product name:', productInfo.name);
-          }
-        }
-
-        console.log('📊 Final product info:', {
-          name: productInfo.name,
-          labels: productInfo.labels.length
-        });
-
-        resolve(productInfo);
-      });
+    const response = await axios.post(visionUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
     });
 
+    if (!response.data || !response.data.responses || response.data.responses.length === 0) {
+      console.log('❌ No response from Google Vision API');
+      return null;
+    }
+
+    const visionResponse = response.data.responses[0];
+    let productInfo = {
+      name: null,
+      urls: [],
+      labels: []
+    };
+
+    // Process WEB_DETECTION (similar to Google Lens)
+    if (visionResponse.webDetection) {
+      const webDetection = visionResponse.webDetection;
+
+      // Get web entities (product names/descriptions)
+      if (webDetection.webEntities && webDetection.webEntities.length > 0) {
+        // Find the best product name (usually the first entity with high score)
+        const sortedEntities = webDetection.webEntities
+          .sort((a, b) => (b.score || 0) - (a.score || 0))
+          .filter(e => e.description && e.description.length > 3);
+
+        if (sortedEntities.length > 0) {
+          productInfo.name = sortedEntities[0].description;
+          console.log('✅ Product name from Google Vision:', productInfo.name);
+
+          // Add other entities as labels
+          sortedEntities.slice(1, 6).forEach(entity => {
+            if (entity.description && entity.score > 0.5) {
+              productInfo.labels.push(entity.description);
+            }
+          });
+        }
+      }
+
+      // Get pages with matching images (product pages)
+      if (webDetection.pagesWithMatchingImages && webDetection.pagesWithMatchingImages.length > 0) {
+        webDetection.pagesWithMatchingImages.forEach(page => {
+          if (page.url) {
+            productInfo.urls.push(page.url);
+          }
+        });
+        console.log(`✅ Found ${productInfo.urls.length} matching pages from Google Vision`);
+      }
+
+      // Get full matching images (more product URLs)
+      if (webDetection.fullMatchingImages && webDetection.fullMatchingImages.length > 0) {
+        webDetection.fullMatchingImages.forEach(image => {
+          if (image.url && !productInfo.urls.includes(image.url)) {
+            productInfo.urls.push(image.url);
+          }
+        });
+      }
+
+      // Get partial matching images
+      if (webDetection.partialMatchingImages && webDetection.partialMatchingImages.length > 0) {
+        webDetection.partialMatchingImages.slice(0, 5).forEach(image => {
+          if (image.url && !productInfo.urls.includes(image.url)) {
+            productInfo.urls.push(image.url);
+          }
+        });
+      }
+    }
+
+    // Process LABEL_DETECTION as fallback
+    if (!productInfo.name && visionResponse.labelAnnotations && visionResponse.labelAnnotations.length > 0) {
+      const sortedLabels = visionResponse.labelAnnotations
+        .sort((a, b) => (b.score || 0) - (a.score || 0))
+        .filter(l => l.description && l.description.length > 3);
+
+      if (sortedLabels.length > 0 && sortedLabels[0].score > 0.8) {
+        productInfo.name = sortedLabels[0].description;
+        console.log('✅ Product name from labels (fallback):', productInfo.name);
+      }
+
+      // Add other labels
+      sortedLabels.slice(1, 6).forEach(label => {
+        if (label.description && label.score > 0.7) {
+          productInfo.labels.push(label.description);
+        }
+      });
+    }
+
+    console.log('📊 Final product info from Google Vision:', {
+      name: productInfo.name,
+      urls: productInfo.urls.length,
+      labels: productInfo.labels.length
+    });
+
+    return productInfo;
+
   } catch (error) {
-    console.error('❌ Clarifai function error:', error.message);
+    console.error('❌ Google Vision API error:', error.message);
+    if (error.response) {
+      console.error('❌ Response status:', error.response.status);
+      console.error('❌ Response data:', error.response.data);
+    }
     return null;
   }
 };
@@ -1154,15 +1186,16 @@ router.post('/scan-image', async (req, res) => {
               success: true,
               product: {
                 id: insertResult.rows[0].id,
-                name: name,
                 barcode: null,
-                image: finalImageUrl,
+                name: name,
                 price: prices.length > 0 ? prices[0].price : null,
+                image: finalImageUrl,
                 description: null,
-                prices: prices,
-                lastScannedAt: new Date().toISOString(),
+                suggestions: [],
+                lastScannedAt: null,
                 lastScannedLatitude: latitude || null,
-                lastScannedLongitude: longitude || null
+                lastScannedLongitude: longitude || null,
+                prices: prices
               }
             });
           }
@@ -1225,19 +1258,16 @@ router.post('/scan-image', async (req, res) => {
         success: true,
         product: {
           id: newProduct.id,
-          name: name,
           barcode: null,
-          image: finalImageUrl,
+          name: name,
           price: formattedPrices.length > 0 ? formattedPrices[0].price : null,
+          image: finalImageUrl,
           description: null,
-          brand: productInfo?.brand || null,
-          category: productInfo?.category || null,
-          platform: platform,
-          url: productUrl,
-          prices: formattedPrices,
-          lastScannedAt: new Date().toISOString(),
+          suggestions: [],
+          lastScannedAt: null,
           lastScannedLatitude: latitude || null,
-          lastScannedLongitude: longitude || null
+          lastScannedLongitude: longitude || null,
+          prices: formattedPrices
         }
       });
     } catch (dbError) {
