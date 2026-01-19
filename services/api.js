@@ -56,6 +56,60 @@ const API_BASE_URL = getApiBaseUrl();
 console.log('🔗 API Base URL configured:', API_BASE_URL);
 
 class ApiService {
+  async scanProductFromImage(base64Image, latitude = null, longitude = null, userId = null) {
+    try {
+      const url = `${API_BASE_URL}/products/scan-image`;
+      console.log('🌐 Calling API:', url);
+      console.log('📦 Image size (base64 length):', base64Image ? base64Image.length : 0);
+      console.log('📦 Latitude:', latitude);
+      console.log('📦 Longitude:', longitude);
+      console.log('📦 User ID:', userId);
+      
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      // Enviar imagen en base64
+      const apiResponse = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: base64Image, // Imagen en base64
+          latitude,
+          longitude,
+          user_id: userId,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      
+      console.log('📥 Response status:', apiResponse.status, apiResponse.statusText);
+
+      if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        console.error('❌ API Error Response:', errorText);
+        throw new Error(`API error: ${apiResponse.status} - ${errorText}`);
+      }
+
+      const data = await apiResponse.json();
+      console.log('✅ API Response recibida:', JSON.stringify(data).substring(0, 500));
+      return data;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.error('⏱️ Request timeout after 30 seconds');
+        throw new Error('Request timeout: El servidor no respondió a tiempo');
+      }
+      console.error('❌ Error processing image:', error);
+      console.error('❌ Error name:', error.name);
+      console.error('❌ Error message:', error.message);
+      console.error('❌ Full error:', error);
+      throw error;
+    }
+  }
+
   async scanProduct(barcode, price = null, imageUrl = null, latitude = null, longitude = null, userId = null) {
     try {
       console.log('🌐 Calling API:', `${API_BASE_URL}/products/scan`);

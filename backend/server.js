@@ -16,7 +16,13 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`📥 ${req.method} ${req.path}`, req.body || '');
+  const bodyPreview = req.body ? JSON.stringify(req.body).substring(0, 200) : '';
+  console.log(`📥 ${req.method} ${req.path}`);
+  if (req.body && req.body.image) {
+    console.log(`📥 Body contains image (length: ${req.body.image ? req.body.image.length : 0})`);
+  } else {
+    console.log(`📥 Body preview: ${bodyPreview}`);
+  }
   next();
 });
 

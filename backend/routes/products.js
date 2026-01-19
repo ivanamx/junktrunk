@@ -2,6 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
 const axios = require('axios');
+const OpenAI = require('openai');
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // Barcode lookup service (UPCItemDB → OpenFoodFacts → eBay → Google Custom Search)
 // Nueva lógica:
@@ -1339,6 +1345,190 @@ router.get('/history/today', async (req, res) => {
       success: false,
       error: 'Database error', 
       details: err.message 
+    });
+  }
+});
+
+// Scan product from image endpoint
+router.post('/scan-image', async (req, res) => {
+  try {
+    console.log('📥 ========== SCAN-IMAGE REQUEST RECEIVED ==========');
+    console.log('📥 Request body keys:', Object.keys(req.body));
+    console.log('📥 Has image_uri:', !!req.body.image_uri);
+    console.log('📥 Has image:', !!req.body.image);
+    console.log('📥 Image length (if present):', req.body.image ? req.body.image.length : 0);
+    console.log('📥 Latitude:', req.body.latitude);
+    console.log('📥 Longitude:', req.body.longitude);
+    console.log('📥 User ID:', req.body.user_id);
+    
+    const { image_uri, image, latitude, longitude, user_id } = req.body;
+
+    if (!image_uri && !image) {
+      console.error('❌ Image URI or image data is required');
+      return res.status(400).json({ 
+        success: false,
+        error: 'Image is required',
+        received: {
+          has_image_uri: !!image_uri,
+          has_image: !!image,
+          body_keys: Object.keys(req.body)
+        }
+      });
+    }
+
+    // Download image if URI provided, otherwise use base64
+    let imageData = image;
+    if (image_uri) {
+      try {
+        console.log('📥 Downloading image from URI:', image_uri);
+        const imageResponse = await axios.get(image_uri, {
+          responseType: 'arraybuffer',
+          timeout: 10000
+        });
+        const base64 = Buffer.from(imageResponse.data, 'binary').toString('base64');
+        imageData = `data:image/jpeg;base64,${base64}`;
+        console.log('✅ Image downloaded and converted to base64');
+      } catch (downloadError) {
+        console.error('❌ Error downloading image:', downloadError);
+        return res.status(400).json({ error: 'Could not download image from URI' });
+      }
+    }
+
+    // Use OpenAI Vision to identify the product
+    let productName = null;
+    try {
+      console.log('🤖 Using OpenAI Vision to identify product...');
+      console.log('🤖 Image data length:', imageData ? imageData.length : 0);
+      console.log('🤖 Image data preview:', imageData ? imageData.substring(0, 100) : 'null');
+      
+      if (!process.env.OPENAI_API_KEY) {
+        console.error('❌ OPENAI_API_KEY not configured');
+        throw new Error('OPENAI_API_KEY not configured');
+      }
+      
+      console.log('🤖 OpenAI API Key exists:', !!process.env.OPENAI_API_KEY);
+      console.log('🤖 Calling OpenAI API...');
+
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'What product is shown in this image? Respond with ONLY the product name and brand if visible (e.g., "Samsung Microwave" or "Nike Running Shoes"). Do not include any other text or explanation.'
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageData // base64 image
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 50
+      });
+
+      productName = completion.choices[0].message.content.trim();
+      console.log('✅ Product identified by OpenAI:', productName);
+    } catch (openaiError) {
+      console.error('❌ OpenAI Vision error:', openaiError);
+      console.error('❌ OpenAI error message:', openaiError.message);
+      console.error('❌ OpenAI error stack:', openaiError.stack);
+      return res.status(500).json({
+        success: false,
+        error: 'Could not identify product. Please ensure OPENAI_API_KEY is configured.',
+        details: openaiError.message
+      });
+    }
+
+    if (!productName || productName.length < 3) {
+      return res.status(400).json({
+        success: false,
+        error: 'Could not identify product in image. Please try with a clearer photo.'
+      });
+    }
+
+    // Search for product information using the identified name
+    console.log('🔍 Searching for product:', productName);
+    const productInfo = await lookupProductByName(productName);
+
+    if (!productInfo || !productInfo.name) {
+      return res.status(404).json({
+        success: false,
+        error: 'PRODUCT_NOT_FOUND',
+        message: 'Product identified but no information found in databases.'
+      });
+    }
+
+    // Save to database (similar to scan endpoint)
+    try {
+      const existingResult = await pool.query('SELECT * FROM products WHERE barcode = $1', [productName]);
+      let product = existingResult.rows[0];
+
+      if (!product) {
+        // Insert new product
+        const insertResult = await pool.query(
+          `INSERT INTO products (barcode, name, price, image_url, platform_suggestions, prices) 
+           VALUES ($1, $2, $3, $4, $5, $6) 
+           RETURNING *`,
+          [
+            productName,
+            productInfo.name,
+            productInfo.price || null,
+            productInfo.image || null,
+            JSON.stringify(productInfo.suggestions || []),
+            JSON.stringify(productInfo.prices || [])
+          ]
+        );
+        product = insertResult.rows[0];
+      }
+
+      // Save scan history
+      if (user_id) {
+        await pool.query(
+          `INSERT INTO scan_history (user_id, product_id, scanned_at, latitude, longitude)
+           VALUES ($1, $2, NOW(), $3, $4)`,
+          [user_id, product.id, latitude, longitude]
+        );
+      }
+
+      res.json({
+        success: true,
+        product: {
+          id: product.id,
+          barcode: product.barcode,
+          name: product.name,
+          price: product.price,
+          image: product.image_url,
+          description: product.description,
+          prices: productInfo.prices || [],
+          suggestions: productInfo.suggestions || []
+        }
+      });
+    } catch (dbError) {
+      console.error('Database error:', dbError);
+      // Return product info even if DB save fails
+      res.json({
+        success: true,
+        product: {
+          barcode: productName,
+          name: productInfo.name,
+          price: productInfo.price,
+          image: productInfo.image,
+          prices: productInfo.prices || [],
+          suggestions: productInfo.suggestions || []
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Scan image error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      details: error.message
     });
   }
 });

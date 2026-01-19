@@ -27,7 +27,12 @@
               "junktrunk"
             ]
           }
-        ]
+        ],
+        "LSApplicationQueriesSchemes": [
+          "googleapp",
+          "google"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

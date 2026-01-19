@@ -11,10 +11,12 @@ import {
   Linking,
   FlatList,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import ApiService from '../services/api';
@@ -147,6 +149,7 @@ export default function HomeScreen() {
       }
     }
   }, [scannedProduct]);
+
 
   const handleScan = async () => {
     console.log('📷 handleScan called, permission:', permission);
@@ -405,6 +408,156 @@ export default function HomeScreen() {
       return;
     }
     setShowDescription(true);
+  };
+
+  const handlePhotoPress = async () => {
+    console.log('📷 Botón PHOTO presionado');
+    
+    try {
+      // Pedir permisos de cámara/medios
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permisos necesarios',
+          'Necesitamos acceso a tus fotos para identificar productos.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // Mostrar opciones: tomar foto o seleccionar de galería
+      Alert.alert(
+        'Tomar foto del producto',
+        'Selecciona una opción:',
+        [
+          {
+            text: 'Cancelar',
+            style: 'cancel',
+          },
+          {
+            text: 'Tomar foto',
+            onPress: async () => {
+              try {
+                const result = await ImagePicker.launchCameraAsync({
+                  mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                  allowsEditing: true,
+                  aspect: [4, 3],
+                  quality: 0.5,
+                  base64: true, // Obtener base64 directamente
+                });
+
+                if (!result.canceled && result.assets[0]) {
+                  await processProductImage(result.assets[0]);
+                }
+              } catch (error) {
+                console.error('Error tomando foto:', error);
+                Alert.alert('Error', 'No se pudo tomar la foto. Por favor, intenta de nuevo.');
+              }
+            },
+          },
+          {
+            text: 'Seleccionar de galería',
+            onPress: async () => {
+              try {
+                const result = await ImagePicker.launchImageLibraryAsync({
+                  mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                  allowsEditing: true,
+                  aspect: [4, 3],
+                  quality: 0.5,
+                  base64: true, // Obtener base64 directamente
+                });
+
+                if (!result.canceled && result.assets[0]) {
+                  await processProductImage(result.assets[0]);
+                }
+              } catch (error) {
+                console.error('Error seleccionando imagen:', error);
+                Alert.alert('Error', 'No se pudo seleccionar la imagen. Por favor, intenta de nuevo.');
+              }
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Error en handlePhotoPress:', error);
+      Alert.alert('Error', 'Ocurrió un error. Por favor, intenta de nuevo.');
+    }
+  };
+
+  const processProductImage = async (imageAsset) => {
+    try {
+      console.log('📸 Iniciando procesamiento de imagen');
+      console.log('📸 Image asset:', imageAsset);
+      setLoading(true);
+      setIsProcessing(true);
+
+      // Obtener base64 directamente de expo-image-picker
+      if (!imageAsset.base64) {
+        throw new Error('No se pudo obtener base64 de la imagen');
+      }
+
+      const base64Image = `data:image/jpeg;base64,${imageAsset.base64}`;
+      const sizeInMB = (imageAsset.base64.length * 3) / 4 / 1024 / 1024;
+      console.log('✅ Base64 obtenido directamente de ImagePicker');
+      console.log('✅ Tamaño base64:', imageAsset.base64.length, 'caracteres');
+      console.log('✅ Tamaño aproximado:', sizeInMB.toFixed(2), 'MB');
+      
+      if (sizeInMB > 5) {
+        console.warn('⚠️ Imagen muy grande, puede causar problemas');
+      }
+
+      // Obtener ubicación
+      let latitude = null;
+      let longitude = null;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({});
+          latitude = location.coords.latitude;
+          longitude = location.coords.longitude;
+          console.log('📍 Ubicación obtenida:', latitude, longitude);
+        }
+      } catch (locationError) {
+        console.error('⚠️ Error obteniendo ubicación:', locationError);
+      }
+
+      // Obtener usuario
+      const user = await AuthService.getUser();
+      const userId = user ? user.id : null;
+      console.log('👤 Usuario ID:', userId);
+
+      // Enviar imagen al backend para procesar
+      console.log('🌐 Enviando imagen al backend...');
+      const response = await ApiService.scanProductFromImage(base64Image, latitude, longitude, userId);
+      console.log('📥 Respuesta del backend:', response);
+
+      if (response && response.success && response.product) {
+        console.log('✅ Producto encontrado:', response.product.name);
+        setScannedProduct(response.product);
+      } else {
+        console.log('⚠️ Producto no encontrado en respuesta');
+        Alert.alert(
+          'Producto no encontrado',
+          'No pudimos identificar el producto en la imagen. Por favor, intenta con otra foto.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('❌ Error completo procesando imagen:', error);
+      console.error('❌ Error name:', error.name);
+      console.error('❌ Error message:', error.message);
+      console.error('❌ Error stack:', error.stack);
+      
+      const errorMessage = error.message || 'Error desconocido';
+      Alert.alert(
+        'Error',
+        `No se pudo procesar la imagen: ${errorMessage}\n\nRevisa los logs para más detalles.`,
+        [{ text: 'OK' }]
+      );
+    } finally {
+      setLoading(false);
+      setIsProcessing(false);
+    }
   };
 
   const handlePlatformSelect = (platform, response) => {
@@ -667,8 +820,7 @@ export default function HomeScreen() {
           
           <TouchableOpacity
             style={[styles.photoButton, styles.scanButtonFlex]}
-            onPress={() => {}}
-            disabled={true}
+            onPress={handlePhotoPress}
           >
             <Text style={styles.scanButtonText} numberOfLines={1} adjustsFontSizeToFit={true} minimumFontScale={0.7}>PHOTO</Text>
           </TouchableOpacity>
@@ -1005,7 +1157,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
-    opacity: 0.5,
   },
   historyButton: {
     backgroundColor: '#1a1a1a',
