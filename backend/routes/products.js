@@ -430,6 +430,100 @@ const lookupBarcode = async (barcode) => {
 
 // Removed complex JWT/OAuth functions - now using simple API key
 
+// Search for barcode using product info (brand, name, model)
+const searchBarcodeByProductInfo = async (brand, name, model) => {
+  try {
+    console.log('🔍 Searching barcode for:', { brand, name, model });
+    
+    // Build search query
+    const searchTerms = [];
+    if (brand) searchTerms.push(brand);
+    if (name) searchTerms.push(name);
+    if (model) searchTerms.push(model);
+    const searchQuery = searchTerms.join(' ').trim();
+    
+    if (!searchQuery || searchQuery.length < 3) {
+      console.log('⚠️ Search query too short');
+      return null;
+    }
+    
+    // Try UPCItemDB search API
+    try {
+      console.log('🌐 Searching UPCItemDB for barcode...');
+      const upcResponse = await axios.get('https://api.upcitemdb.com/prod/trial/search', {
+        params: { 
+          s: searchQuery,
+          type: 'product'
+        },
+        timeout: 10000
+      });
+      
+      if (upcResponse.data && upcResponse.data.items && upcResponse.data.items.length > 0) {
+        // Find best match by comparing brand/name/model
+        for (const item of upcResponse.data.items) {
+          const itemTitle = (item.title || '').toLowerCase();
+          const itemDescription = (item.description || '').toLowerCase();
+          const searchLower = searchQuery.toLowerCase();
+          
+          // Check if item matches our search criteria
+          if (itemTitle.includes(searchLower) || itemDescription.includes(searchLower)) {
+            if (item.upc || item.ean || item.gtin) {
+              const barcode = item.upc || item.ean || item.gtin;
+              console.log('✅ Found barcode in UPCItemDB:', barcode);
+              return barcode;
+            }
+          }
+        }
+        
+        // If no exact match, try first item with barcode
+        const firstItem = upcResponse.data.items[0];
+        if (firstItem && (firstItem.upc || firstItem.ean || firstItem.gtin)) {
+          const barcode = firstItem.upc || firstItem.ean || firstItem.gtin;
+          console.log('✅ Found barcode in UPCItemDB (first result):', barcode);
+          return barcode;
+        }
+      }
+    } catch (upcError) {
+      console.log('⚠️ UPCItemDB search failed:', upcError.message);
+    }
+    
+    // Try OpenFoodFacts search (if brand/name available)
+    if (brand || name) {
+      try {
+        console.log('🌐 Searching OpenFoodFacts for barcode...');
+        const searchTerm = brand && name ? `${brand} ${name}` : (brand || name);
+        const offResponse = await axios.get('https://world.openfoodfacts.org/cgi/search.pl', {
+          params: {
+            search_terms: searchTerm,
+            search_simple: 1,
+            action: 'process',
+            json: 1,
+            page_size: 5
+          },
+          timeout: 10000
+        });
+        
+        if (offResponse.data && offResponse.data.products && offResponse.data.products.length > 0) {
+          for (const product of offResponse.data.products) {
+            if (product.code && product.code.length >= 8) {
+              console.log('✅ Found barcode in OpenFoodFacts:', product.code);
+              return product.code;
+            }
+          }
+        }
+      } catch (offError) {
+        console.log('⚠️ OpenFoodFacts search failed:', offError.message);
+      }
+    }
+    
+    console.log('⚠️ No barcode found in any API');
+    return null;
+  } catch (error) {
+    console.error('Error searching for barcode:', error);
+    return null;
+  }
+};
+
 // Lookup product by name (similar to lookupBarcode but searches by product name)
 const lookupProductByName = async (productName) => {
   try {
@@ -1396,6 +1490,7 @@ router.post('/scan-image', async (req, res) => {
 
     // Use OpenAI Vision to identify the product
     let productName = null;
+    let extractedBarcode = null;
     try {
       console.log('🤖 Using OpenAI Vision to identify product...');
       console.log('🤖 Image data length:', imageData ? imageData.length : 0);
@@ -1417,7 +1512,7 @@ router.post('/scan-image', async (req, res) => {
             content: [
               {
                 type: 'text',
-                text: 'What product is shown in this image? Respond with ONLY the product name and brand if visible (e.g., "Samsung Microwave" or "Nike Running Shoes"). Do not include any other text or explanation.'
+                text: 'Analyze this product image and extract the following information in JSON format: {"brand": "brand name if visible", "name": "product name", "model": "model number if visible"}. If any field is not visible, use null. Respond ONLY with valid JSON, no other text.'
               },
               {
                 type: 'image_url',
@@ -1428,11 +1523,33 @@ router.post('/scan-image', async (req, res) => {
             ]
           }
         ],
-        max_tokens: 50
+        max_tokens: 200,
+        response_format: { type: "json_object" }
       });
 
-      productName = completion.choices[0].message.content.trim();
-      console.log('✅ Product identified by OpenAI:', productName);
+      const productData = JSON.parse(completion.choices[0].message.content.trim());
+      console.log('✅ Product data from OpenAI:', productData);
+      
+      // Extract brand, name, model (NO barcode from image)
+      const brand = productData.brand || null;
+      const name = productData.name || null;
+      const model = productData.model || null;
+      productName = name || (brand ? brand + ' ' + (model || '') : 'Unknown Product').trim();
+      
+      console.log('📦 Brand:', brand);
+      console.log('📦 Name:', name);
+      console.log('📦 Model:', model);
+      console.log('📦 Product name:', productName);
+      
+      // Search for barcode using brand+name+model in APIs
+      console.log('🔍 Searching for barcode using brand+name+model...');
+      extractedBarcode = await searchBarcodeByProductInfo(brand, name, model);
+      
+      if (extractedBarcode) {
+        console.log('✅ Barcode found:', extractedBarcode);
+      } else {
+        console.log('⚠️ No barcode found in APIs');
+      }
     } catch (openaiError) {
       console.error('❌ OpenAI Vision error:', openaiError);
       console.error('❌ OpenAI error message:', openaiError.message);
@@ -1451,9 +1568,17 @@ router.post('/scan-image', async (req, res) => {
       });
     }
 
-    // Search for product information using the identified name
-    console.log('🔍 Searching for product:', productName);
-    const productInfo = await lookupProductByName(productName);
+    // If we extracted a barcode, use lookupBarcode (the working function)
+    // Otherwise, fall back to name lookup
+    let productInfo = null;
+    
+    if (extractedBarcode && extractedBarcode.length >= 8) {
+      console.log('🔍 Barcode found! Using lookupBarcode with code:', extractedBarcode);
+      productInfo = await lookupBarcode(extractedBarcode);
+    } else {
+      console.log('⚠️ No barcode found, using product name for lookup:', productName);
+      productInfo = await lookupProductByName(productName);
+    }
 
     if (!productInfo || !productInfo.name) {
       return res.status(404).json({
@@ -1464,8 +1589,10 @@ router.post('/scan-image', async (req, res) => {
     }
 
     // Save to database (similar to scan endpoint)
+    // Use extracted barcode if available, otherwise use productName
+    const barcodeToSave = extractedBarcode || productName;
     try {
-      const existingResult = await pool.query('SELECT * FROM products WHERE barcode = $1', [productName]);
+      const existingResult = await pool.query('SELECT * FROM products WHERE barcode = $1', [barcodeToSave]);
       let product = existingResult.rows[0];
 
       if (!product) {
@@ -1475,7 +1602,7 @@ router.post('/scan-image', async (req, res) => {
            VALUES ($1, $2, $3, $4, $5, $6) 
            RETURNING *`,
           [
-            productName,
+            barcodeToSave,
             productInfo.name,
             productInfo.price || null,
             productInfo.image || null,
@@ -1514,7 +1641,7 @@ router.post('/scan-image', async (req, res) => {
       res.json({
         success: true,
         product: {
-          barcode: productName,
+          barcode: barcodeToSave,
           name: productInfo.name,
           price: productInfo.price,
           image: productInfo.image,
